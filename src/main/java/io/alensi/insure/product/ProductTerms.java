@@ -46,5 +46,35 @@ public record ProductTerms(
 
     /** One band: {@code {"from": 18, "to": 25}} or {@code {"in": [...]}}; applies to all coverages when {@code coverageCode} is null. */
     public record Factor(String attribute, String coverageCode, JsonNode band, BigDecimal multiplier) {
+
+        /** Whether {@code fact} falls in this band; a missing or non-comparable fact matches no band. */
+        public boolean matches(Object fact) {
+            if (fact == null) {
+                return false;
+            }
+            if (band.has("in")) {
+                for (JsonNode value : band.get("in")) {
+                    if (value.asString().equals(fact.toString())) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            if (!(fact instanceof BigDecimal number)) {
+                return false;
+            }
+            return (!band.has("from") || number.compareTo(band.get("from").decimalValue()) >= 0)
+                    && (!band.has("to") || number.compareTo(band.get("to").decimalValue()) <= 0);
+        }
+
+        /** {@code 18–24}, {@code 25+} or {@code COMMERCIAL}, for explaining a premium. */
+        public String describeBand() {
+            if (band.has("in")) {
+                return band.get("in").valueStream().map(JsonNode::asString).reduce((a, b) -> a + ", " + b).orElse("");
+            }
+            String from = band.has("from") ? band.get("from").asString() : null;
+            String to = band.has("to") ? band.get("to").asString() : null;
+            return from == null ? "up to " + to : to == null ? from + "+" : from + "–" + to;
+        }
     }
 }

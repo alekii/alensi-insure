@@ -1,6 +1,5 @@
 package io.alensi.insure.customer;
 
-import java.time.Clock;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -15,7 +14,6 @@ import io.alensi.insure.customer.CustomerViews.CustomerView;
 import io.alensi.insure.platform.audit.AuditLog;
 import io.alensi.insure.platform.pii.PiiProtector;
 import io.alensi.insure.platform.security.CurrentTenant;
-import io.alensi.insure.platform.security.CurrentUser;
 import io.alensi.insure.platform.security.InsurePermissions;
 import io.alensi.insure.platform.web.ApiProblem;
 import io.alensi.insure.platform.web.Ids;
@@ -44,7 +42,6 @@ class CustomerService {
     private final AlensiAccess access;
     private final PiiProtector pii;
     private final AuditLog audit;
-    private final Clock clock = Clock.systemUTC();
 
     CustomerService(CustomerRepository customers, AlensiAccess access, PiiProtector pii, AuditLog audit) {
         this.customers = customers;
@@ -80,10 +77,8 @@ class CustomerService {
             });
         }
 
-        UUID actor = CurrentUser.id();
         String number = "CUS-%06d".formatted(customers.nextCustomerNumber());
-        Customer customer = new Customer(Ids.newId(), tenant, number, request.customerType(), request.unitCode(),
-                actor, clock.instant());
+        Customer customer = new Customer(Ids.newId(), number, request.customerType(), request.unitCode());
         customer.name(individual ? request.firstName() : null, individual ? request.lastName() : null,
                 individual ? null : request.organisationName());
         customer.identity(individual ? request.dateOfBirth() : null, hash == null ? null : pii.encrypt(identifier),
@@ -166,7 +161,6 @@ class CustomerService {
             customer.setAddress(text(patch, "address", null, null));
             changed.put("address", "changed");
         }
-        customer.touch(CurrentUser.id(), clock.instant());
         customer = customers.saveAndFlush(customer);
         audit.record("CUSTOMER_UPDATED", SUBJECT, customer.getId(), customer.getUnitCode(), changed);
         return view(customer);
@@ -182,7 +176,6 @@ class CustomerService {
             throw ApiProblem.conflict("invalid-state", "Invalid state", "The customer is already inactive.");
         }
         customer.deactivate();
-        customer.touch(CurrentUser.id(), clock.instant());
         customer = customers.saveAndFlush(customer);
         audit.record("CUSTOMER_DEACTIVATED", SUBJECT, customer.getId(), customer.getUnitCode(), Map.of());
         return view(customer);

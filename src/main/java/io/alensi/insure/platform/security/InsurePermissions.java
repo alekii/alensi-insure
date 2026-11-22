@@ -11,6 +11,10 @@ public final class InsurePermissions {
     public static final String PRODUCTS_VIEW = "products.view";
     public static final String PRODUCTS_MANAGE = "products.manage";
     public static final String COVERAGE_MANAGE = "coverage.manage";
+    public static final String POLICIES_VIEW = "policies.view";
+    public static final String POLICIES_QUOTE = "policies.quote";
+    public static final String POLICIES_ISSUE = "policies.issue";
+    public static final String PREMIUMS_VIEW = "premiums.view";
     public static final String AUDIT_VIEW = "audit.view";
 
     /**

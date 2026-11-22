@@ -15,6 +15,8 @@ interface ProductRepository extends Repository<Product, UUID> {
 
     boolean existsByTenantCodeAndCode(String tenantCode, String code);
 
+    Optional<Product> findByTenantCodeAndCode(String tenantCode, String code);
+
     List<Product> findByTenantCodeOrderByCode(String tenantCode);
 
     List<Product> findByTenantCodeAndStatusOrderByCode(String tenantCode, Product.Status status);

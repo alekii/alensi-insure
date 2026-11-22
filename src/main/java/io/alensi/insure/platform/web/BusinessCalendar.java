@@ -28,4 +28,9 @@ public class BusinessCalendar {
     public Instant now() {
         return clock.instant();
     }
+
+    /** The business date of an instant, e.g. the day a payment arrived. */
+    public LocalDate dateOf(Instant instant) {
+        return LocalDate.ofInstant(instant, clock.getZone());
+    }
 }

@@ -46,6 +46,23 @@ public class ProductCatalog {
                         .map(version -> terms(product, version)));
     }
 
+    /** As {@link #sellable(UUID, LocalDate)}, by product code (as quotes name products). */
+    @Transactional(readOnly = true)
+    public Optional<ProductTerms> sellable(String productCode, LocalDate startDate) {
+        return products.findByTenantCodeAndCode(CurrentTenant.require(), productCode)
+                .flatMap(product -> sellable(product.getId(), startDate));
+    }
+
+    /** The terms of a version a policy was sold under, whatever its status now. */
+    @Transactional(readOnly = true)
+    public Optional<ProductTerms> version(UUID productId, int versionNumber) {
+        String tenant = CurrentTenant.require();
+        return products.findByTenantCodeAndId(tenant, productId).flatMap(product -> versions
+                .findByTenantCodeAndProductIdAndVersionNumber(tenant, productId, versionNumber)
+                .filter(version -> version.getStatus() != ProductVersion.Status.DRAFT)
+                .map(version -> terms(product, version)));
+    }
+
     private ProductTerms terms(Product product, ProductVersion version) {
         Map<String, BaseRate> rates = version.getBaseRates().stream()
                 .collect(Collectors.toMap(BaseRate::getCoverageCode, Function.identity()));

@@ -13,9 +13,9 @@ Column-level reference for every table. Relationships are drawn in the [ERD](erd
 | Money | `decimal(19,4)`; currency is `varchar(3)` ISO 4217 (with a `CHECK` on `^[A-Z]{3}$`; `char(n)` fails Hibernate schema validation) on the owning aggregate. Amounts are never negative — direction is expressed by type or direction columns |
 | Timestamps | `timestamptz`, stored in UTC. Business dates (incident date, effective date) are `date` |
 | Enums | `varchar` with a `CHECK` constraint, not PostgreSQL enum types, so new values are an additive migration |
-| Audit columns | Mutable aggregate roots have `version bigint` (optimistic lock), `created_at`, `updated_at`, `created_by uuid`, `updated_by uuid`. These are listed once here and omitted from the tables below |
+| Audit columns | Mutable aggregate roots have `version bigint` (optimistic lock), `created_at`, `updated_at`, `created_by uuid`, `updated_by uuid`. These are listed once here and omitted from the tables below. In code they come from the `AuditedEntity` base class, which stamps them on insert and update (`created_by`/`updated_by` is the signed-in user, or the nil UUID for system work such as payment events); nobody sets them by hand |
 | Users | User references (`*_by`, `assigned_to`) are Alensi Identity user IDs (the Keycloak `sub`). No foreign key — users live in Identity |
-| Tenant | Every table holding insurer data has `tenant_code varchar(16) not null` (an Alensi Identity tenant, e.g. `JUB`). It leads every index, foreign keys between tenant tables are composite (`tenant_code`, `id`), every query filters on it, and a row-level security policy enforces it again in the database ([Row-Level Security](../api/authorization.md#row-level-security)). The `messaging` schema is the only exception. Like audit columns, it is omitted from the tables below |
+| Tenant | Every table holding insurer data has `tenant_code varchar(16) not null`, stamped from the current tenant when the row is first persisted (base class `TenantOwned`), never changed afterwards, and refused if the row is written while acting in another tenant (an Alensi Identity tenant, e.g. `JUB`). It leads every index, foreign keys between tenant tables are composite (`tenant_code`, `id`), every query filters on it, and a row-level security policy enforces it again in the database ([Row-Level Security](../api/authorization.md#row-level-security)). The `messaging` schema is the only exception. Like audit columns, it is omitted from the tables below |
 | Unit scope | `unit_code` is the Alensi Identity target code of the owning team or branch. Authorization filters on it; see [Authorization](../api/authorization.md#record-ownership) |
 | Soft delete | Not used. Records move to terminal statuses; personal-data erasure is handled by an anonymisation job |
 
@@ -185,20 +185,27 @@ One row per band.
 | id | uuid | no | Primary key |
 | policy_number | varchar(24) | no | Business identifier, unique |
 | customer_id | uuid | no | FK → `customer.customer` |
+| product_id | uuid | no | The product sold |
 | product_version_id | uuid | no | FK → `product.product_version` |
+| product_code | varchar(32) | no | Copied for search and display |
+| product_version_number | int | no | Copied for display |
 | status | varchar(20) | no | See [Policy Status](#policy-status) |
 | effective_date | date | no | Cover starts at 00:00 local time |
 | expiry_date | date | no | Cover ends at 23:59:59 local time |
 | total_premium | decimal(19,4) | no | Rated premium after loadings, discounts, and minimum |
+| total_sum_insured | decimal(19,4) | yes | Sum of the insured items' values |
 | currency | varchar(3) | no | Copied from the product version |
 | payment_frequency | varchar(16) | no | `ANNUAL`, `SEMI_ANNUAL`, `QUARTERLY`, `MONTHLY` |
 | unit_code | varchar(64) | no | Selling team or branch; defaults to the customer's |
 | renewed_from_policy_id | uuid | yes | FK → `policy.policy`; set on renewals |
-| quote_expires_at | timestamptz | yes | Set while `QUOTED` |
+| quote_expires_at | timestamptz | yes | Set while `QUOTED` (default 7 days, `insure.quote-validity`) |
+| accepted_at | timestamptz | yes | When the customer accepted the quote |
 | issued_at | timestamptz | yes | When the policy became `ACTIVE` for the first time |
 | cancelled_at | timestamptz | yes | |
 | cancellation_reason | varchar(32) | yes | `CUSTOMER_REQUEST`, `NON_PAYMENT`, `MISREPRESENTATION`, `REPLACED`, `OTHER` |
 | flow_process_id | varchar(64) | yes | Alensi Flow process handling underwriting referral, if any |
+| eligibility | jsonb | no | Failed eligibility rules at quote time (`ruleCode`, `outcome`, `message`) |
+| rating | jsonb | no | Premium breakdown at quote time: per coverage the basis, base, applied factors and premium; subtotal, minimum premium, total |
 
 Indexes: `(customer_id)`, `(status, expiry_date)` for expiry and renewal jobs, `(tenant_code, unit_code, status)`.
 
@@ -220,9 +227,13 @@ Indexes: `(customer_id)`, `(status, expiry_date)` for expiry and renewal jobs, `
 | id | uuid | no | Primary key |
 | policy_id | uuid | no | FK |
 | coverage_definition_id | uuid | no | FK → `product.coverage_definition` |
-| limit_amount | decimal(19,4) | no | Limit on this policy |
+| code, name | varchar | no | Copied from the coverage definition |
+| limit_amount | decimal(19,4) | no | Limit on this policy: the fixed limit, or the item's sum insured |
+| limit_basis | varchar(16) | no | `PER_EVENT`, `AGGREGATE` |
 | deductible_value | decimal(19,4) | no | |
 | deductible_type | varchar(16) | no | `FIXED`, `PERCENTAGE` |
+| deductible_minimum | decimal(19,4) | yes | Floor of a `PERCENTAGE` deductible |
+| waiting_period_days | int | no | |
 | premium_amount | decimal(19,4) | no | Rated premium for this coverage |
 | consumed_amount | decimal(19,4) | no | Sum of settled payouts against an `AGGREGATE` limit |
 | reserved_amount | decimal(19,4) | no | Sum of approved-but-unsettled amounts; prevents two approvals exceeding the limit |
@@ -253,6 +264,7 @@ Constraint: `consumed_amount + reserved_amount <= limit_amount` for `AGGREGATE` 
 |---|---|---|---|
 | id | uuid | no | Primary key |
 | policy_id | uuid | no | FK → `policy.policy`, unique |
+| unit_code | varchar(64) | no | The policy's unit, so `premiums.view` is checked without reading the policy |
 | frequency | varchar(16) | no | Same values as `policy.payment_frequency` |
 | total_amount | decimal(19,4) | no | Equals the policy's total premium plus adjustments |
 | currency | varchar(3) | no | |
@@ -268,6 +280,7 @@ Constraint: `consumed_amount + reserved_amount <= limit_amount` for `AGGREGATE` 
 | amount | decimal(19,4) | no | |
 | paid_amount | decimal(19,4) | no | Sum of succeeded collections |
 | status | varchar(20) | no | See [Installment Status](#installment-status) |
+| paid_at | timestamptz | yes | When the installment became fully paid |
 
 Index: `(status, due_date)` for the due/overdue scheduler.
 

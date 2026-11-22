@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
+import io.alensi.insure.platform.persistence.AuditedEntity;
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -15,7 +16,6 @@ import jakarta.persistence.Id;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.OrderBy;
 import jakarta.persistence.Table;
-import jakarta.persistence.Version;
 
 /**
  * A version of a product's terms. Only a {@code DRAFT} can change; {@code PUBLISHED} is immutable
@@ -23,14 +23,13 @@ import jakarta.persistence.Version;
  */
 @Entity
 @Table(schema = "product", name = "product_version")
-class ProductVersion {
+class ProductVersion extends AuditedEntity {
 
     enum Status { DRAFT, PUBLISHED, WITHDRAWN }
 
     @Id
     private UUID id;
 
-    private String tenantCode;
     private UUID productId;
     private int versionNumber;
 
@@ -46,14 +45,6 @@ class ProductVersion {
     private UUID wordingDocumentId;
     private Instant publishedAt;
     private Instant withdrawnAt;
-
-    @Version
-    private Long version;
-
-    private Instant createdAt;
-    private Instant updatedAt;
-    private UUID createdBy;
-    private UUID updatedBy;
 
     @OneToMany(mappedBy = "productVersion", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("position")
@@ -79,9 +70,8 @@ class ProductVersion {
     }
 
     ProductVersion(UUID id, Product product, int versionNumber, String currency, int termMonths, int gracePeriodDays,
-            BigDecimal minimumPremium, UUID actor, Instant now) {
+            BigDecimal minimumPremium) {
         this.id = id;
-        this.tenantCode = product.getTenantCode();
         this.productId = product.getId();
         this.versionNumber = versionNumber;
         this.status = Status.DRAFT;
@@ -89,16 +79,13 @@ class ProductVersion {
         this.termMonths = termMonths;
         this.gracePeriodDays = gracePeriodDays;
         this.minimumPremium = minimumPremium;
-        this.createdAt = now;
-        this.updatedAt = now;
-        this.createdBy = actor;
-        this.updatedBy = actor;
     }
 
     void terms(String currency, int termMonths, int gracePeriodDays) {
         this.currency = currency;
         this.termMonths = termMonths;
         this.gracePeriodDays = gracePeriodDays;
+        markModified();
     }
 
     void replaceCoverages(List<CoverageDefinition> newCoverages, List<CoverageExclusion> newExclusions) {
@@ -106,11 +93,13 @@ class ProductVersion {
         newCoverages.forEach(coverage -> coverages.add(coverage.attachTo(this)));
         exclusions.clear();
         newExclusions.forEach(exclusion -> exclusions.add(exclusion.attachTo(this)));
+        markModified();
     }
 
     void replaceEligibility(List<EligibilityRule> rules) {
         eligibility.clear();
         rules.forEach(rule -> eligibility.add(rule.attachTo(this)));
+        markModified();
     }
 
     void replaceRating(BigDecimal minimumPremium, List<BaseRate> rates, List<RatingFactor> factors) {
@@ -119,6 +108,7 @@ class ProductVersion {
         rates.forEach(rate -> baseRates.add(rate.attachTo(this)));
         ratingFactors.clear();
         factors.forEach(factor -> ratingFactors.add(factor.attachTo(this)));
+        markModified();
     }
 
     void publish(LocalDate effectiveFrom, UUID wordingDocumentId, Instant now) {
@@ -138,11 +128,6 @@ class ProductVersion {
         this.withdrawnAt = now;
     }
 
-    void touch(UUID actor, Instant now) {
-        this.updatedBy = actor;
-        this.updatedAt = now;
-    }
-
     boolean coversDate(LocalDate date) {
         return status == Status.PUBLISHED && !date.isBefore(effectiveFrom)
                 && (effectiveTo == null || !date.isAfter(effectiveTo));
@@ -150,10 +135,6 @@ class ProductVersion {
 
     UUID getId() {
         return id;
-    }
-
-    String getTenantCode() {
-        return tenantCode;
     }
 
     UUID getProductId() {
@@ -198,10 +179,6 @@ class ProductVersion {
 
     Instant getPublishedAt() {
         return publishedAt;
-    }
-
-    long getVersion() {
-        return version;
     }
 
     List<CoverageDefinition> getCoverages() {
