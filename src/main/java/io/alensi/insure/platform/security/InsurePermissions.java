@@ -8,6 +8,9 @@ public final class InsurePermissions {
     public static final String CUSTOMERS_VIEW = "customers.view";
     public static final String CUSTOMERS_CREATE = "customers.create";
     public static final String CUSTOMERS_UPDATE = "customers.update";
+    public static final String PRODUCTS_VIEW = "products.view";
+    public static final String PRODUCTS_MANAGE = "products.manage";
+    public static final String COVERAGE_MANAGE = "coverage.manage";
     public static final String AUDIT_VIEW = "audit.view";
 
     /**

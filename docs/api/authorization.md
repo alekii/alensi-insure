@@ -125,7 +125,7 @@ Every check is made on a target. This table says which target each record uses.
 | Document, extraction | The owner's unit (customer, policy or claim) | Owner |
 | AI assessment | The subject's unit (claim or policy) | Subject |
 | Anomaly flag | The claim's unit | Claim |
-| Product, product version, knowledge document | **Tenant root** (e.g. `JUB`) | Tenant-wide: a product is sold by every branch |
+| Product, product version, knowledge document | **Tenant root** (e.g. `JUB`) | Tenant-wide: a product is sold by every branch. Configuring needs the permission on the tenant root; `products.view` held **anywhere** in the tenant is enough to see published versions, because agents hold it on their team and quote every product. Drafts are visible only to callers who can configure products |
 | Audit event | The subject's unit, or the tenant root for tenant-wide subjects | Subject |
 
 Moving a customer or policy to another unit (branch transfer) is not in v1. When added, it will be a command requiring the relevant `update` permission on **both** units.
@@ -293,10 +293,11 @@ Generated from `x-authorization` in [openapi.yaml](./openapi.yaml). Paths are re
 | Method | Path | Requires (permission on target) | Filter / rules |
 |---|---|---|---|
 | `POST` | `/products` | `products.manage` on tenant |  |
-| `GET` | `/products` | `products.view` on tenant |  |
-| `GET` | `/products/{productId}` | `products.view` on tenant |  |
+| `GET` | `/products` | `products.view` anywhere |  |
+| `GET` | `/products/{productId}` | `products.view` anywhere |  |
 | `POST` | `/products/{productId}/versions` | `products.manage` on tenant |  |
-| `GET` | `/products/{productId}/versions/{versionNumber}` | `products.view` on tenant |  |
+| `GET` | `/products/{productId}/versions/{versionNumber}` | `products.view` anywhere |  |
+| `PUT` | `/products/{productId}/versions/{versionNumber}/terms` | `products.manage` on tenant | [draft-only](#draft-only) |
 | `PUT` | `/products/{productId}/versions/{versionNumber}/rating` | `products.manage` on tenant | [draft-only](#draft-only) |
 | `PUT` | `/products/{productId}/versions/{versionNumber}/coverages` | `coverage.manage` on tenant | [draft-only](#draft-only) |
 | `PUT` | `/products/{productId}/versions/{versionNumber}/eligibility` | `coverage.manage` on tenant | [draft-only](#draft-only) |
@@ -307,7 +308,7 @@ Generated from `x-authorization` in [openapi.yaml](./openapi.yaml). Paths are re
 
 | Method | Path | Requires (permission on target) | Filter / rules |
 |---|---|---|---|
-| `POST` | `/policies/quotes` | `policies.quote` on body.unitCode<br>`customers.view` on customer<br>`products.view` on tenant |  |
+| `POST` | `/policies/quotes` | `policies.quote` on body.unitCode<br>`customers.view` on customer<br>`products.view` anywhere |  |
 | `GET` | `/policies` | — | list filtered by `policies.view` |
 | `GET` | `/policies/{policyId}` | `policies.view` on policy |  |
 | `POST` | `/policies/{policyId}/accept` | `policies.issue` on policy |  |

@@ -7,11 +7,9 @@ import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.startsWith;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.BDDMockito.given;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -19,25 +17,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
-import com.jayway.jsonpath.JsonPath;
-import io.alensi.identity.client.AlensiIdentityClient;
 import io.alensi.identity.client.AlensiIdentityException;
 import io.alensi.identity.client.IdentityContext;
-import io.alensi.identity.client.PermissionMap;
-import io.alensi.insure.IntegrationTest;
+import io.alensi.insure.ApiIntegrationTest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.MediaType;
 import org.springframework.security.access.AccessDeniedException;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
@@ -45,7 +35,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
  * Customers through the API with the default identity roles (authorization.md, "Role Walkthrough").
  * Identity is mocked at the HTTP client, so the real starter (cache, scopes, fail-closed) runs.
  */
-class CustomerApiIntegrationTest extends IntegrationTest {
+class CustomerApiIntegrationTest extends ApiIntegrationTest {
 
     static final String T1 = "JUB-KE-NRB-NWS-T1";
     static final String NWS = "JUB-KE-NRB-NWS";
@@ -63,19 +53,9 @@ class CustomerApiIntegrationTest extends IntegrationTest {
     static final Staff MADISON_AGENT = new Staff("mad.agent", "MAD",
             Map.of("team", Map.of("MAD-KE-NRB-T1", AGENT_PERMISSIONS)));
 
-    @Autowired
-    MockMvc mvc;
-
-    @MockitoBean
-    AlensiIdentityClient identity;
-
     @BeforeEach
     void identity() {
-        for (Staff staff : List.of(AGENT, NWS_MANAGER, WLD_MANAGER, AUDITOR, MADISON_AGENT)) {
-            given(identity.permissions(eq(staff.token()), any())).willReturn(new PermissionMap(staff.grants()));
-            given(identity.context(eq(staff.token()), any())).willReturn(
-                    new IdentityContext(staff.id(), staff.username(), staff.tenant(), List.of(staff.tenant())));
-        }
+        register(AGENT, NWS_MANAGER, WLD_MANAGER, AUDITOR, MADISON_AGENT);
     }
 
     @Test
@@ -265,27 +245,6 @@ class CustomerApiIntegrationTest extends IntegrationTest {
     }
 
     private static String id(ResultActions created) throws Exception {
-        return JsonPath.read(created.andExpect(status().isCreated()).andReturn().getResponse().getContentAsString(),
-                "$.id");
-    }
-
-    private ResultActions call(Staff staff, MockHttpServletRequestBuilder request) throws Exception {
-        return mvc.perform(request.with(jwt().jwt(token -> token.tokenValue(staff.token())
-                .subject(staff.id().toString()).claim("preferred_username", staff.username()))));
-    }
-
-    private ResultActions send(Staff staff, MockHttpServletRequestBuilder request, String body) throws Exception {
-        return call(staff, request.contentType(MediaType.APPLICATION_JSON).content(body));
-    }
-
-    record Staff(String username, String tenant, Map<String, Map<String, Set<String>>> grants, UUID id) {
-
-        Staff(String username, String tenant, Map<String, Map<String, Set<String>>> grants) {
-            this(username, tenant, new HashMap<>(grants), UUID.nameUUIDFromBytes(username.getBytes()));
-        }
-
-        String token() {
-            return "token-" + username;
-        }
+        return createdId(created);
     }
 }

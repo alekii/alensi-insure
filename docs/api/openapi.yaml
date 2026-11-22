@@ -13,7 +13,7 @@ info:
     | Field | Meaning |
     |---|---|
     | `requires[]` | Permissions the caller must hold. All entries apply unless an entry has `when`. |
-    | `requires[].target` | The target the permission is checked on: `tenant` (the tenant's root target), a record (`customer`, `policy`, `claim`, `document`, `anomaly`, or `subject` for the record an AI assessment is about; checked on the record's `unitCode`), or `body.unitCode`. |
+    | `requires[].target` | The target the permission is checked on: `tenant` (the tenant's root target), `anywhere` (held on at least one target in the tenant; for tenant-wide records that every unit uses, such as products), a record (`customer`, `policy`, `claim`, `document`, `anomaly`, or `subject` for the record an AI assessment is about; checked on the record's `unitCode`), or `body.unitCode`. |
     | `requires[].when` | The entry applies only if this condition holds. |
     | `requires[].limit` | The permission is limited; the request field whose amount must be within the caller's approval limit. |
     | `requires[].anyOf` | Holding any one of the listed permissions is enough. |
@@ -214,7 +214,7 @@ paths:
       summary: Products with their current published version
       x-authorization:
         requires:
-          - { permission: products.view, target: tenant }
+          - { permission: products.view, target: anywhere }
       parameters: [{ $ref: '#/components/parameters/Tenant' }, { name: status, in: query, schema: { type: string, enum: [ACTIVE, RETIRED] } }]
       responses:
         '200': { description: Products, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Product' } } } } }
@@ -223,9 +223,10 @@ paths:
       tags: [Products]
       operationId: getProduct
       summary: Product with its versions
+      description: Draft versions are listed only for callers who can configure products (`products.manage` or `coverage.manage` on the tenant root).
       x-authorization:
         requires:
-          - { permission: products.view, target: tenant }
+          - { permission: products.view, target: anywhere }
       parameters: [{ $ref: '#/components/parameters/ProductId' }, { $ref: '#/components/parameters/Tenant' }]
       responses:
         '200': { description: Product, content: { application/json: { schema: { $ref: '#/components/schemas/Product' } } } }
@@ -235,6 +236,7 @@ paths:
       tags: [Products]
       operationId: createProductVersion
       summary: Create a DRAFT version, optionally copying an existing one
+      description: One draft at a time per product (`409 draft-exists`). A new empty draft takes the product's currency, a 12-month term and a 30-day grace period.
       x-authorization:
         requires:
           - { permission: products.manage, target: tenant }
@@ -249,23 +251,45 @@ paths:
       responses:
         '201': { description: Draft created, content: { application/json: { schema: { $ref: '#/components/schemas/ProductVersion' } } } }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /products/{productId}/versions/{versionNumber}:
     get:
       tags: [Products]
       operationId: getProductVersion
       summary: "Full version: coverages, exclusions, eligibility, rating"
+      description: A draft is `404` for callers who can't configure products.
       x-authorization:
         requires:
-          - { permission: products.view, target: tenant }
+          - { permission: products.view, target: anywhere }
       parameters: [{ $ref: '#/components/parameters/ProductId' }, { $ref: '#/components/parameters/VersionNumber' }, { $ref: '#/components/parameters/Tenant' }]
       responses:
         '200': { description: Version, content: { application/json: { schema: { $ref: '#/components/schemas/ProductVersion' } } } }
         '404': { $ref: '#/components/responses/NotFound' }
+  /products/{productId}/versions/{versionNumber}/terms:
+    put:
+      tags: [Products]
+      operationId: replaceProductTerms
+      summary: Replace a DRAFT version's currency, term and grace period
+      description: The currency can change only while the draft has no coverages or rates (`409 currency-locked`), because their amounts are in it.
+      x-authorization:
+        requires:
+          - { permission: products.manage, target: tenant }
+        rules: [draft-only]
+      parameters: [{ $ref: '#/components/parameters/ProductId' }, { $ref: '#/components/parameters/VersionNumber' }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/VersionTerms' } } }
+      responses:
+        '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/ProductVersion' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /products/{productId}/versions/{versionNumber}/rating:
     put:
       tags: [Products]
       operationId: replaceProductRating
-      summary: Replace a DRAFT version's rating factors and base rates
+      summary: Replace a DRAFT version's minimum premium, base rates and rating factors
+      description: Base rates and factors must name coverages the draft has.
       x-authorization:
         requires:
           - { permission: products.manage, target: tenant }
@@ -319,6 +343,12 @@ paths:
       tags: [Products]
       operationId: publishProductVersion
       summary: Validate and publish; optionally register the policy wording for RAG
+      description: |
+        Publishes from `effectiveFrom` (default today in the insurer's time zone, never in the past). The published version
+        it replaces stops selling the day before, so exactly one version is sellable on any date; publishing on or before a
+        published version's start is refused (withdraw that version first). `422 product-not-publishable` lists everything
+        missing in `errors[]`: at least one coverage, at least one mandatory coverage, a base rate for every coverage, and no
+        rate or factor pointing at a removed coverage.
       x-authorization:
         requires:
           - { permission: products.manage, target: tenant }
@@ -342,6 +372,7 @@ paths:
       tags: [Products]
       operationId: withdrawProductVersion
       summary: Stop new sales on this version
+      description: Only a published version can be withdrawn. Policies sold under it are unaffected.
       x-authorization:
         requires:
           - { permission: products.manage, target: tenant }
@@ -365,7 +396,7 @@ paths:
         requires:
           - { permission: policies.quote, target: body.unitCode }
           - { permission: customers.view, target: customer }
-          - { permission: products.view, target: tenant }
+          - { permission: products.view, target: anywhere }
       parameters: [{ $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IdempotencyKey' }]
       requestBody:
         required: true
@@ -1548,10 +1579,10 @@ components:
       type: object
       required: [code, name, lineOfBusiness]
       properties:
-        code: { type: string, example: MOTOR-COMP }
+        code: { type: string, pattern: '^[A-Z][A-Z0-9-]{1,31}$', example: MOTOR-COMP }
         name: { type: string }
         lineOfBusiness: { type: string, enum: [MOTOR, HEALTH, PROPERTY, LIFE, TRAVEL] }
-        currency: { type: string, default: KES }
+        currency: { type: string, default: KES, description: Default currency of new versions }
     Product:
       type: object
       properties:
@@ -1560,8 +1591,9 @@ components:
         code: { type: string }
         name: { type: string }
         lineOfBusiness: { type: string }
+        currency: { type: string }
         status: { type: string, enum: [ACTIVE, RETIRED] }
-        currentVersion: { type: [integer, 'null'] }
+        currentVersion: { type: [integer, 'null'], description: The published version sellable today }
         versions:
           type: array
           items:
@@ -1569,18 +1601,42 @@ components:
             properties:
               versionNumber: { type: integer }
               status: { type: string, enum: [DRAFT, PUBLISHED, WITHDRAWN] }
-    ProductVersion:
+              effectiveFrom: { type: [string, 'null'], format: date }
+              effectiveTo: { type: [string, 'null'], format: date }
+        version: { type: integer }
+    VersionTerms:
       type: object
       properties:
-        productId: { type: string, format: uuid }
-        versionNumber: { type: integer }
-        status: { type: string, enum: [DRAFT, PUBLISHED, WITHDRAWN] }
-        effectiveFrom: { type: string, format: date }
-        coverages: { $ref: '#/components/schemas/CoverageConfiguration' }
-        eligibility: { type: array, items: { $ref: '#/components/schemas/EligibilityRule' } }
-        rating: { $ref: '#/components/schemas/Rating' }
-        wordingDocumentId: { type: [string, 'null'], format: uuid }
-        version: { type: integer }
+        currency: { type: string, example: KES }
+        termMonths: { type: integer, minimum: 1, maximum: 60 }
+        gracePeriodDays: { type: integer, minimum: 0, maximum: 365 }
+    ProductVersion:
+      allOf:
+        - $ref: '#/components/schemas/VersionTerms'
+        - type: object
+          properties:
+            productId: { type: string, format: uuid }
+            versionNumber: { type: integer }
+            status: { type: string, enum: [DRAFT, PUBLISHED, WITHDRAWN] }
+            effectiveFrom: { type: [string, 'null'], format: date }
+            effectiveTo: { type: [string, 'null'], format: date, description: Set when a later version takes over }
+            publishedAt: { type: [string, 'null'], format: date-time }
+            wordingDocumentId: { type: [string, 'null'], format: uuid }
+            coverages: { $ref: '#/components/schemas/CoverageConfiguration' }
+            eligibility: { type: array, items: { $ref: '#/components/schemas/EligibilityRule' } }
+            rating: { $ref: '#/components/schemas/Rating' }
+            version: { type: integer }
+    Condition:
+      type: object
+      description: |
+        A deterministic rule over facts, shared by eligibility rules and exclusions. `attribute` is a fact path under
+        `customer`, `item`, `policy` (and `claim` for exclusions). `value`: a single value for `EQ`/`NE`; a number or ISO date
+        for `GT`/`GTE`/`LT`/`LTE`; a non-empty list for `IN`/`NOT_IN`; `[low, high]` for `BETWEEN` (inclusive).
+      required: [attribute, operator, value]
+      properties:
+        attribute: { type: string, example: item.vehicle.age }
+        operator: { type: string, enum: [EQ, NE, GT, GTE, LT, LTE, IN, NOT_IN, BETWEEN] }
+        value: { description: See above, example: 15 }
     CoverageConfiguration:
       type: object
       properties:
@@ -1588,60 +1644,80 @@ components:
           type: array
           items:
             type: object
-            required: [code, name]
+            required: [code, name, incidentTypes, limit]
             properties:
-              code: { type: string, example: OWN_DAMAGE }
+              code: { type: string, pattern: '^[A-Z][A-Z0-9_]{1,31}$', example: OWN_DAMAGE }
               name: { type: string }
-              limitBasis: { type: string, enum: [SUM_INSURED, FIXED] }
-              fixedLimit: { $ref: '#/components/schemas/Money' }
+              description: { type: string }
+              mandatory: { type: boolean, default: false, description: Included in every policy of this version }
+              incidentTypes: { type: array, items: { type: string }, description: 'From the line of business, e.g. COLLISION, THEFT for MOTOR' }
+              limit:
+                type: object
+                required: [type, basis]
+                properties:
+                  type: { type: string, enum: [FIXED, SUM_INSURED], description: SUM_INSURED limits to the insured item's value }
+                  amount: { $ref: '#/components/schemas/Money', description: Required for FIXED only }
+                  basis: { type: string, enum: [PER_EVENT, AGGREGATE], description: PER_EVENT resets each incident; AGGREGATE is shared across the term }
               deductible:
                 type: object
+                description: Defaults to a fixed deductible of 0
                 properties:
                   type: { type: string, enum: [FIXED, PERCENTAGE] }
-                  value: { type: string }
-                  minimum: { $ref: '#/components/schemas/Money' }
-              waitingPeriodDays: { type: integer }
+                  value: { type: string, description: An amount for FIXED, a percentage of the assessed loss for PERCENTAGE, example: '2.5' }
+                  minimum: { $ref: '#/components/schemas/Money', description: PERCENTAGE only }
+              waitingPeriodDays: { type: integer, minimum: 0, default: 0 }
         exclusions:
           type: array
           items:
             type: object
+            required: [code, text]
             properties:
-              code: { type: string }
-              clauseReference: { type: string, example: 4.2(f) }
-              coverageCodes: { type: array, items: { type: string } }
-              rule: { type: [object, 'null'], description: Structured condition evaluated by the coverage engine }
+              code: { type: string, example: UNLICENSED_DRIVER }
               text: { type: string }
+              clauseReference: { type: string, example: 4.2(f) }
+              coverageCodes: { type: array, items: { type: string }, description: Coverages it applies to; empty means all }
+              rule: { oneOf: [{ $ref: '#/components/schemas/Condition' }, { type: 'null' }], description: Evaluated by the coverage check; null when a person must judge }
     EligibilityRule:
       type: object
+      required: [code, rule, outcome, message]
       properties:
-        code: { type: string }
-        expression: { type: object, description: Structured condition, e.g. vehicle age ≤ 15 }
-        outcome: { type: string, enum: [DECLINE, REFER] }
+        code: { type: string, example: VEHICLE_AGE }
+        rule: { $ref: '#/components/schemas/Condition', description: Must hold for the quote }
+        outcome: { type: string, enum: [DECLINE, REFER], description: What happens when the rule fails }
         message: { type: string }
     Rating:
       type: object
+      description: "Each coverage's premium: base rate × the multipliers of its matching bands; the total is at least minimumPremium."
       properties:
+        minimumPremium: { $ref: '#/components/schemas/Money' }
         baseRates:
           type: array
           items:
             type: object
+            required: [coverageCode]
+            description: Exactly one of basePremium (annual amount) and ratePercent (of the sum insured)
             properties:
               coverageCode: { type: string }
-              ratePercent: { type: string }
-              minimumPremium: { $ref: '#/components/schemas/Money' }
+              basePremium: { $ref: '#/components/schemas/Money' }
+              ratePercent: { type: string, example: '4.5' }
         factors:
           type: array
           items:
             type: object
+            required: [attribute, bands]
             properties:
-              factor: { type: string, example: item.vehicle.age }
+              attribute: { type: string, example: customer.age }
+              coverageCode: { type: [string, 'null'], description: One coverage, or all when null }
               bands:
                 type: array
                 items:
                   type: object
+                  description: Either from/to (inclusive; either may be open) or in
                   properties:
-                    band: { type: string, example: 6-10 }
-                    multiplier: { type: string, example: '1.15' }
+                    from: { type: number }
+                    to: { type: number }
+                    in: { type: array, items: { type: string } }
+                    multiplier: { type: string, example: '1.25' }
 
     # -------- policies
     PolicyStatus:
