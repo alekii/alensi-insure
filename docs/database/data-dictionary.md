@@ -66,19 +66,22 @@ Read model of a customer's timeline, built by consuming other modules' events. R
 
 ## product
 
+Products are tenant-wide. Child tables of a version are replaced as a whole while the version is a `DRAFT`, and never change afterwards.
+
 ### product.product
 
 | Column | Type | Null | Description |
 |---|---|---|---|
 | id | uuid | no | Primary key |
-| code | varchar(32) | no | Unique, e.g. `MOTOR-COMP` |
+| code | varchar(32) | no | Unique per tenant, e.g. `MOTOR-COMP` |
 | name | varchar(255) | no | |
 | line_of_business | varchar(16) | no | `MOTOR`, `HEALTH`, `PROPERTY`, `LIFE`, `TRAVEL` |
+| currency | varchar(3) | no | Default currency of new versions |
 | status | varchar(16) | no | `ACTIVE`, `RETIRED` (no new policies on any version) |
 
 ### product.product_version
 
-Immutable once `PUBLISHED`. Policies reference the exact version they were sold under.
+Immutable once `PUBLISHED`, apart from `effective_to` being set when a later version takes over. Policies reference the exact version they were sold under.
 
 | Column | Type | Null | Description |
 |---|---|---|---|
@@ -89,12 +92,14 @@ Immutable once `PUBLISHED`. Policies reference the exact version they were sold 
 | currency | varchar(3) | no | Currency of limits and premiums |
 | term_months | int | no | Policy term, usually 12 |
 | grace_period_days | int | no | Days after an installment due date before the policy lapses |
-| effective_from | date | no | First date a policy can start on this version |
-| effective_to | date | yes | Last date a new policy can start on this version |
 | minimum_premium | decimal(19,4) | no | Floor applied after rating |
+| effective_from | date | yes | First date a policy can start on this version; set on publishing |
+| effective_to | date | yes | Last date a new policy can start; set when a later version is published |
+| wording_document_id | uuid | yes | Policy wording registered for RAG |
 | published_at | timestamptz | yes | |
+| withdrawn_at | timestamptz | yes | |
 
-Constraint: at most one `PUBLISHED` version per product has overlapping effective dates.
+Constraints: one `DRAFT` per product; an exclusion constraint (`btree_gist`, deferred) guarantees no two `PUBLISHED` versions of a product have overlapping effective dates.
 
 ### product.coverage_definition
 
@@ -102,28 +107,32 @@ Constraint: at most one `PUBLISHED` version per product has overlapping effectiv
 |---|---|---|---|
 | id | uuid | no | Primary key |
 | product_version_id | uuid | no | FK → `product.product_version` |
+| position | int | no | Display order |
 | code | varchar(32) | no | Unique per version, e.g. `OWN_DAMAGE`, `THIRD_PARTY_PROPERTY` |
 | name | varchar(255) | no | |
 | description | text | yes | |
-| limit_amount | decimal(19,4) | no | Maximum payable; may be overridden per policy within product bounds |
-| limit_basis | varchar(16) | no | `PER_EVENT` (resets each incident), `AGGREGATE` (shared across the policy term) |
-| deductible_value | decimal(19,4) | no | Amount or percentage, see `deductible_type` |
-| deductible_type | varchar(16) | no | `FIXED`, `PERCENTAGE` (of assessed loss) |
-| waiting_period_days | int | no | Days after policy start before incidents are covered; `0` for none |
 | mandatory | boolean | no | Included in every policy of this version |
-| base_premium | decimal(19,4) | no | Annual premium before rating factors |
 | incident_types | text[] | no | Incident types this coverage responds to (see [Incident Types](#incident-types)) |
+| limit_type | varchar(16) | no | `FIXED` (`limit_amount`) or `SUM_INSURED` (the insured item's sum insured) |
+| limit_amount | decimal(19,4) | yes | Required for `FIXED` |
+| limit_basis | varchar(16) | no | `PER_EVENT` (resets each incident), `AGGREGATE` (shared across the policy term) |
+| deductible_type | varchar(16) | no | `FIXED`, `PERCENTAGE` (of assessed loss) |
+| deductible_value | decimal(19,4) | no | Amount or percentage, see `deductible_type` |
+| deductible_minimum | decimal(19,4) | yes | Floor of a `PERCENTAGE` deductible |
+| waiting_period_days | int | no | Days after policy start before incidents are covered; `0` for none |
 
 ### product.coverage_exclusion
 
 | Column | Type | Null | Description |
 |---|---|---|---|
 | id | uuid | no | Primary key |
-| coverage_definition_id | uuid | no | FK → `product.coverage_definition` |
-| code | varchar(32) | no | e.g. `UNLICENSED_DRIVER` |
+| product_version_id | uuid | no | FK → `product.product_version` |
+| position | int | no | |
+| code | varchar(32) | no | Unique per version, e.g. `UNLICENSED_DRIVER` |
 | description | text | no | Human-readable exclusion |
 | clause_reference | varchar(64) | yes | Section in the policy wording, e.g. `4.2(b)`; links to RAG chunks |
-| machine_rule | jsonb | yes | Deterministic rule evaluated by the coverage check (e.g. `{"attribute":"claim.incidentType","operator":"IN","value":["WEAR_AND_TEAR"]}`). `NULL` means the exclusion needs human interpretation and is surfaced as `NEEDS_REVIEW` context |
+| coverage_codes | text[] | no | Coverages it applies to; empty means all of the version's coverages |
+| machine_rule | jsonb | yes | A condition (`{"attribute": "claim.driver.licensed", "operator": "EQ", "value": false}`) evaluated by the coverage check. `NULL` means the exclusion needs human interpretation and is surfaced as `NEEDS_REVIEW` context |
 
 ### product.eligibility_rule
 
@@ -131,21 +140,38 @@ Constraint: at most one `PUBLISHED` version per product has overlapping effectiv
 |---|---|---|---|
 | id | uuid | no | Primary key |
 | product_version_id | uuid | no | FK |
-| attribute | varchar(64) | no | Fact path, e.g. `customer.age`, `item.vehicle.yearOfManufacture` |
+| position | int | no | |
+| code | varchar(32) | no | Unique per version, e.g. `VEHICLE_AGE` |
+| attribute | varchar(64) | no | Fact path, e.g. `customer.age`, `item.vehicle.age` |
 | operator | varchar(16) | no | `EQ`, `NE`, `GT`, `GTE`, `LT`, `LTE`, `IN`, `NOT_IN`, `BETWEEN` |
 | value | jsonb | no | Comparison value |
 | outcome | varchar(16) | no | `DECLINE` (hard stop) or `REFER` (underwriter review) when the rule **fails** |
 | message | varchar(255) | no | Explanation shown to the user |
 
-### product.rating_factor
+### product.base_rate
 
 | Column | Type | Null | Description |
 |---|---|---|---|
 | id | uuid | no | Primary key |
 | product_version_id | uuid | no | FK |
+| coverage_code | varchar(32) | no | Unique per version |
+| base_premium | decimal(19,4) | yes | Annual premium before rating factors |
+| rate_percent | decimal(9,6) | yes | Annual premium as a percentage of the sum insured, e.g. `4.5` for motor own damage |
+
+Constraint: exactly one of `base_premium` and `rate_percent`.
+
+### product.rating_factor
+
+One row per band.
+
+| Column | Type | Null | Description |
+|---|---|---|---|
+| id | uuid | no | Primary key |
+| product_version_id | uuid | no | FK |
+| position | int | no | |
 | coverage_code | varchar(32) | yes | Applies to one coverage; `NULL` applies to all |
 | attribute | varchar(64) | no | Fact path, e.g. `customer.age` |
-| band | jsonb | no | `{"from": 18, "to": 25}` or `{"in": ["NAIROBI"]}` |
+| band | jsonb | no | `{"from": 18, "to": 25}` (inclusive, either end may be open) or `{"in": ["NAIROBI"]}` |
 | multiplier | decimal(8,4) | no | Applied to the base premium when the band matches; factors multiply |
 
 ---

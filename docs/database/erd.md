@@ -77,9 +77,10 @@ erDiagram
 erDiagram
     PRODUCT {
         uuid id PK
-        varchar code UK
+        varchar code UK "unique per tenant"
         varchar name
         varchar line_of_business "MOTOR | HEALTH | PROPERTY | LIFE | TRAVEL"
+        varchar currency "default for new versions"
         varchar status "ACTIVE | RETIRED"
     }
     PRODUCT_VERSION {
@@ -87,56 +88,69 @@ erDiagram
         uuid product_id FK
         int version_number
         varchar status "DRAFT | PUBLISHED | WITHDRAWN"
-        char currency
+        varchar currency
         int term_months
         int grace_period_days
-        date effective_from
-        date effective_to
         decimal minimum_premium
+        date effective_from "set on publishing"
+        date effective_to "set when superseded"
+        uuid wording_document_id
     }
     COVERAGE_DEFINITION {
         uuid id PK
         uuid product_version_id FK
         varchar code
         varchar name
-        decimal limit_amount
-        varchar limit_basis "PER_EVENT | AGGREGATE"
-        decimal deductible_value
-        varchar deductible_type "FIXED | PERCENTAGE"
-        int waiting_period_days
         boolean mandatory
-        decimal base_premium
         text_array incident_types
+        varchar limit_type "FIXED | SUM_INSURED"
+        decimal limit_amount "FIXED only"
+        varchar limit_basis "PER_EVENT | AGGREGATE"
+        varchar deductible_type "FIXED | PERCENTAGE"
+        decimal deductible_value
+        decimal deductible_minimum
+        int waiting_period_days
     }
     COVERAGE_EXCLUSION {
         uuid id PK
-        uuid coverage_definition_id FK
+        uuid product_version_id FK
         varchar code
         text description
         varchar clause_reference
+        text_array coverage_codes "empty = all coverages"
         jsonb machine_rule "null = needs human interpretation"
     }
     ELIGIBILITY_RULE {
         uuid id PK
         uuid product_version_id FK
+        varchar code
         varchar attribute
         varchar operator
         jsonb value
         varchar outcome "DECLINE | REFER"
         varchar message
     }
+    BASE_RATE {
+        uuid id PK
+        uuid product_version_id FK
+        varchar coverage_code
+        decimal base_premium "or"
+        decimal rate_percent "of sum insured"
+    }
     RATING_FACTOR {
         uuid id PK
         uuid product_version_id FK
+        varchar coverage_code "null = all"
         varchar attribute
         jsonb band
         decimal multiplier
     }
     PRODUCT ||--|{ PRODUCT_VERSION : "has"
     PRODUCT_VERSION ||--|{ COVERAGE_DEFINITION : defines
-    COVERAGE_DEFINITION ||--o{ COVERAGE_EXCLUSION : excludes
+    PRODUCT_VERSION ||--o{ COVERAGE_EXCLUSION : excludes
     PRODUCT_VERSION ||--o{ ELIGIBILITY_RULE : "is guarded by"
-    PRODUCT_VERSION ||--o{ RATING_FACTOR : "is priced by"
+    PRODUCT_VERSION ||--o{ BASE_RATE : "is priced by"
+    PRODUCT_VERSION ||--o{ RATING_FACTOR : "is adjusted by"
 ```
 
 ## Policy

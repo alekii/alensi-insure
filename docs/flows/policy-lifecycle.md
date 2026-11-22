@@ -99,7 +99,7 @@ Both are deterministic and fully explained in the quote response:
 
 1. Build facts from customer, insured items, requested coverages, and effective date.
 2. Evaluate every eligibility rule. Any `DECLINE` failure → `DECLINED`. Otherwise any `REFER` failure → `REFERRED`. Messages are returned.
-3. For each coverage: `base_premium × Π matching rating factor multipliers`.
+3. For each coverage: base premium (`base_premium`, or `rate_percent` of the item's sum insured) `× Π matching rating factor multipliers`.
 4. Sum coverages, apply underwriting loading if any, apply `minimum_premium`.
 5. Split into installments by payment frequency; rounding difference goes on installment 1.
 

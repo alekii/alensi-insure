@@ -564,6 +564,7 @@ Alensi Insure is developed incrementally, starting with the core insurance domai
 - Tenant isolation enforced twice, by the application and by PostgreSQL row-level security ([ADR-0009](docs/decisions/0009-tenant-isolation-row-level-security.md))
 - Audit trail, RFC 9457 problem responses, ETags with `If-Match`, correlation IDs
 - Customers: register, search, view, update contact details, deactivate. National IDs are encrypted, looked up by hash and only shown masked
+- Products: versions with coverages, limits, deductibles, exclusions, eligibility rules and rating; publishing with effective dates, so exactly one version is sellable on any date
 
 Planned development stages:
 
