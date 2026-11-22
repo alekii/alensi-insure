@@ -73,7 +73,7 @@ The platform combines traditional domain rules with an intelligence layer that a
 
 * Premium calculation
 * Premium schedules
-* Payment tracking
+* Payment tracking (payments are executed by [Alensi Pay](https://github.com/alekii/alensi-pay))
 * Outstanding premium tracking
 * Premium adjustments
 
@@ -90,11 +90,13 @@ The platform combines traditional domain rules with an intelligence layer that a
 
 ### Workflow & Approvals
 
-* Configurable claim workflows
-* Role-based approval
-* Manual review queues
-* Escalation
-* Approval and rejection decisions
+Review queues, approval chains, escalations, and notifications are orchestrated by [Alensi Flow](https://github.com/alekii/alensi-flow). Alensi Insure owns the insurance rules those processes must respect:
+
+* Claim and policy state machines
+* Domain events that start and advance Flow processes
+* Commands Flow invokes on behalf of reviewers
+* Decision invariants: authorised decider, four-eyes, amounts within payable limits
+* Approval and rejection decision records
 * Decision audit trails
 
 ## Intelligence Layer
@@ -377,6 +379,12 @@ The platform is designed so that insurance teams can review:
 
 This keeps important insurance decisions explainable and auditable.
 
+### Why AI When People Decide
+
+The decision takes minutes; the work before it takes hours or days. AI does that work: triaging claims as they arrive, catching missing documents on day one, extracting data from invoices and reports, answering coverage questions with the exact clauses cited, summarising history, and flagging details people easily miss. Reviewers decide faster, from a better-evidenced package, and more consistently across branches.
+
+AI can raise the level of scrutiny a claim receives but never lower it, and every decision records whether the reviewer agreed with or overrode the AI, so its value is measured, not assumed. See [AI Decisioning](docs/ai/ai-decisioning.md#where-ai-adds-value) for the before-and-after view, value by role, and success metrics.
+
 ## Architecture Principles
 
 ### Domain Logic First
@@ -421,6 +429,8 @@ The two layers interact through explicit application interfaces.
 ### Security
 
 Sensitive customer and insurance data must not be exposed unnecessarily to AI providers.
+
+Authentication and authorization are provided by [Alensi Identity](https://github.com/alekii/alensi-identity), with access scoped to branches through Identity's permission targets.
 
 The platform will apply:
 
@@ -489,7 +499,7 @@ Additional infrastructure will support asynchronous processing, document process
 ### Data
 
 * PostgreSQL
-* Vector store
+* pgvector (vector store)
 * Redis
 
 ### Messaging
@@ -575,38 +585,16 @@ Planned development stages:
 
 ## Documentation
 
-Architecture and engineering documentation will be maintained alongside the implementation.
+Architecture and engineering documentation is maintained alongside the implementation in [`docs/`](docs/README.md). It is currently the design baseline for the first development stages.
 
-Planned documentation includes:
-
-```text
-docs/
-├── architecture/
-│   ├── system-context.md
-│   ├── container-diagram.md
-│   └── component-diagram.md
-│
-├── database/
-│   ├── erd.md
-│   └── data-dictionary.md
-│
-├── api/
-│   └── api-spec.md
-│
-├── ai/
-│   ├── intelligence-architecture.md
-│   ├── rag-architecture.md
-│   ├── tool-calling.md
-│   └── ai-decisioning.md
-│
-├── flows/
-│   ├── policy-lifecycle.md
-│   ├── claim-lifecycle.md
-│   └── claim-assessment.md
-│
-└── decisions/
-    └── ADRs
-```
+| Area | Documents |
+|---|---|
+| Architecture | [System Context](docs/architecture/system-context.md) · [Containers](docs/architecture/container-diagram.md) · [Components](docs/architecture/component-diagram.md) |
+| Database | [ERD](docs/database/erd.md) · [Data Dictionary](docs/database/data-dictionary.md) |
+| API | [API Specification](docs/api/api-spec.md) |
+| AI | [Intelligence Architecture](docs/ai/intelligence-architecture.md) · [RAG](docs/ai/rag-architecture.md) · [Tool Calling](docs/ai/tool-calling.md) · [AI Decisioning](docs/ai/ai-decisioning.md) |
+| Flows | [Policy Lifecycle](docs/flows/policy-lifecycle.md) · [Claim Lifecycle](docs/flows/claim-lifecycle.md) · [Claim Assessment](docs/flows/claim-assessment.md) |
+| Decisions | [Architecture Decision Records](docs/decisions/README.md) |
 
 ## License
 
