@@ -565,6 +565,7 @@ Alensi Insure is developed incrementally, starting with the core insurance domai
 - Audit trail, RFC 9457 problem responses, ETags with `If-Match`, correlation IDs
 - Customers: register, search, view, update contact details, deactivate. National IDs are encrypted, looked up by hash and only shown masked
 - Products: versions with coverages, limits, deductibles, exclusions, eligibility rules and rating; publishing with effective dates, so exactly one version is sellable on any date
+- Policies: quotes with explained eligibility and rating, acceptance with a premium schedule, and issuance when the first installment is paid (the Alensi Pay adapter comes with Pay)
 
 Planned development stages:
 

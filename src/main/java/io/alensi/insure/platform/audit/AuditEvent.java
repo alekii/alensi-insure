@@ -2,6 +2,7 @@ package io.alensi.insure.platform.audit;
 
 import java.time.Instant;
 
+import io.alensi.insure.platform.persistence.TenantOwned;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
@@ -14,13 +15,12 @@ import org.hibernate.type.SqlTypes;
 /** Append-only; the runtime role can't update or delete these rows. */
 @Entity
 @Table(schema = "audit", name = "audit_event")
-class AuditEvent {
+class AuditEvent extends TenantOwned {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    private String tenantCode;
     private Instant occurredAt;
     private String actorType;
     private String actorId;
@@ -40,9 +40,8 @@ class AuditEvent {
     protected AuditEvent() {
     }
 
-    AuditEvent(String tenantCode, Instant occurredAt, String actorType, String actorId, String action,
+    AuditEvent(Instant occurredAt, String actorType, String actorId, String action,
             String subjectType, String subjectId, String unitCode, String details, String correlationId) {
-        this.tenantCode = tenantCode;
         this.occurredAt = occurredAt;
         this.actorType = actorType;
         this.actorId = actorId;

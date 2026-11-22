@@ -3,6 +3,7 @@ package io.alensi.insure.product;
 import java.math.BigDecimal;
 import java.util.UUID;
 
+import io.alensi.insure.platform.persistence.TenantOwned;
 import io.alensi.insure.platform.web.Ids;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
@@ -14,12 +15,10 @@ import jakarta.persistence.Table;
 /** A coverage's annual premium before factors: {@code basePremium}, or {@code ratePercent} of the sum insured. */
 @Entity
 @Table(schema = "product", name = "base_rate")
-class BaseRate {
+class BaseRate extends TenantOwned {
 
     @Id
     private UUID id;
-
-    private String tenantCode;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "product_version_id")
@@ -41,7 +40,6 @@ class BaseRate {
 
     BaseRate attachTo(ProductVersion version) {
         this.productVersion = version;
-        this.tenantCode = version.getTenantCode();
         return this;
     }
 

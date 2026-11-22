@@ -14,6 +14,8 @@ interface CustomerRepository extends Repository<Customer, UUID>, JpaSpecificatio
 
     Customer saveAndFlush(Customer customer);
 
+    void flush();
+
     Optional<Customer> findByTenantCodeAndId(String tenantCode, UUID id);
 
     Optional<Customer> findByTenantCodeAndNationalIdHash(String tenantCode, String nationalIdHash);

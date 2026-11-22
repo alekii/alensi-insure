@@ -1,7 +1,10 @@
 package io.alensi.insure.product;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -49,6 +52,61 @@ public record Condition(String attribute, Operator operator, JsonNode value) {
         if (problem != null) {
             violations.add(field + ".value", problem);
         }
+    }
+
+    /**
+     * Whether the condition holds for {@code facts} (fact path → {@code BigDecimal}, {@code String},
+     * {@code Boolean} or {@code LocalDate}). Empty when it can't be decided: the fact is missing or
+     * of a type the operator can't compare. Callers decide what an undecided rule means; quoting
+     * treats it as failed, so a missing fact never silently passes eligibility.
+     */
+    public Optional<Boolean> test(Map<String, Object> facts) {
+        Object fact = facts.get(attribute);
+        if (fact == null) {
+            return Optional.empty();
+        }
+        return switch (operator) {
+            case EQ -> equal(fact, value);
+            case NE -> equal(fact, value).map(equal -> !equal);
+            case IN, NOT_IN -> {
+                boolean decided = false;
+                for (JsonNode candidate : value) {
+                    Optional<Boolean> equal = equal(fact, candidate);
+                    if (equal.orElse(false)) {
+                        yield Optional.of(operator == Operator.IN);
+                    }
+                    decided |= equal.isPresent();
+                }
+                yield decided ? Optional.of(operator == Operator.NOT_IN) : Optional.empty();
+            }
+            case GT -> compare(fact, value).map(c -> c > 0);
+            case GTE -> compare(fact, value).map(c -> c >= 0);
+            case LT -> compare(fact, value).map(c -> c < 0);
+            case LTE -> compare(fact, value).map(c -> c <= 0);
+            case BETWEEN -> compare(fact, value.get(0)).flatMap(low -> compare(fact, value.get(1))
+                    .map(high -> low >= 0 && high <= 0));
+        };
+    }
+
+    private static Optional<Boolean> equal(Object fact, JsonNode node) {
+        if (fact instanceof BigDecimal || fact instanceof LocalDate) {
+            return compare(fact, node).map(c -> c == 0);
+        }
+        if (fact instanceof Boolean flag) {
+            return node.isBoolean() ? Optional.of(flag == node.booleanValue()) : Optional.empty();
+        }
+        return node.isString() ? Optional.of(fact.toString().equals(node.asString())) : Optional.empty();
+    }
+
+    /** fact compared to node: negative, zero or positive; empty when they aren't comparable. */
+    static Optional<Integer> compare(Object fact, JsonNode node) {
+        if (fact instanceof BigDecimal number && node.isNumber()) {
+            return Optional.of(number.compareTo(node.decimalValue()));
+        }
+        if (fact instanceof LocalDate date && node.isString() && date(node.asString()) != null) {
+            return Optional.of(date.compareTo(date(node.asString())));
+        }
+        return Optional.empty();
     }
 
     static void validatePath(String attribute, String field, Set<String> roots, Violations violations) {

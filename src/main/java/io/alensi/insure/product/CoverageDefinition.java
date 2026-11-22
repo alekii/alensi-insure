@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 
+import io.alensi.insure.platform.persistence.TenantOwned;
 import io.alensi.insure.platform.web.Ids;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -19,7 +20,7 @@ import org.hibernate.type.SqlTypes;
 
 @Entity
 @Table(schema = "product", name = "coverage_definition")
-class CoverageDefinition {
+class CoverageDefinition extends TenantOwned {
 
     /** {@code FIXED}: {@code limitAmount}. {@code SUM_INSURED}: the insured item's sum insured. */
     enum LimitType { FIXED, SUM_INSURED }
@@ -32,8 +33,6 @@ class CoverageDefinition {
 
     @Id
     private UUID id;
-
-    private String tenantCode;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "product_version_id")
@@ -89,7 +88,6 @@ class CoverageDefinition {
 
     CoverageDefinition attachTo(ProductVersion version) {
         this.productVersion = version;
-        this.tenantCode = version.getTenantCode();
         return this;
     }
 

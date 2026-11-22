@@ -16,7 +16,6 @@ import java.util.stream.Collectors;
 import io.alensi.identity.client.AlensiAccess;
 import io.alensi.insure.platform.audit.AuditLog;
 import io.alensi.insure.platform.security.CurrentTenant;
-import io.alensi.insure.platform.security.CurrentUser;
 import io.alensi.insure.platform.security.InsurePermissions;
 import io.alensi.insure.platform.web.ApiProblem;
 import io.alensi.insure.platform.web.BusinessCalendar;
@@ -98,8 +97,8 @@ class ProductService {
             throw ApiProblem.conflict("duplicate-product", "Duplicate product",
                     "A product with code %s already exists.".formatted(request.code()));
         }
-        Product product = products.saveAndFlush(new Product(Ids.newId(), tenant, request.code(), request.name(),
-                request.lineOfBusiness(), currency, CurrentUser.id(), calendar.now()));
+        Product product = products.saveAndFlush(new Product(Ids.newId(), request.code(), request.name(),
+                request.lineOfBusiness(), currency));
         audit.record("PRODUCT_CREATED", SUBJECT, product.getId(), tenant,
                 Map.of("code", product.getCode(), "lineOfBusiness", product.getLineOfBusiness().name()));
         return view(product, List.of());
@@ -143,13 +142,12 @@ class ProductService {
         int number = versions.lastVersionNumber(product.getTenantCode(), productId) + 1;
         ProductVersion draft;
         if (copyFrom == null) {
-            draft = new ProductVersion(Ids.newId(), product, number, product.getCurrency(), 12, 30, BigDecimal.ZERO,
-                    CurrentUser.id(), calendar.now());
+            draft = new ProductVersion(Ids.newId(), product, number, product.getCurrency(), 12, 30, BigDecimal.ZERO);
         } else {
             ProductVersion source = versions.findByTenantCodeAndProductIdAndVersionNumber(product.getTenantCode(),
                     productId, copyFrom).orElseThrow(() -> ApiProblem.notFound("Product version " + copyFrom));
             draft = new ProductVersion(Ids.newId(), product, number, source.getCurrency(), source.getTermMonths(),
-                    source.getGracePeriodDays(), source.getMinimumPremium(), CurrentUser.id(), calendar.now());
+                    source.getGracePeriodDays(), source.getMinimumPremium());
             draft.replaceCoverages(source.getCoverages().stream().map(CoverageDefinition::copy).toList(),
                     source.getExclusions().stream().map(CoverageExclusion::copy).toList());
             draft.replaceEligibility(source.getEligibility().stream().map(EligibilityRule::copy).toList());
@@ -375,10 +373,7 @@ class ProductService {
         problems.throwIfAny(HttpStatus.UNPROCESSABLE_CONTENT, "product-not-publishable", "Not publishable",
                 "The version can't be published yet; see errors.");
 
-        superseded.forEach(previous -> {
-            previous.closeOn(from.minusDays(1));
-            previous.touch(CurrentUser.id(), calendar.now());
-        });
+        superseded.forEach(previous -> previous.closeOn(from.minusDays(1)));
         draft.publish(from, request == null ? null : request.wordingDocumentId(), calendar.now());
         Map<String, Object> details = new LinkedHashMap<>();
         details.put("versionNumber", versionNumber);
@@ -578,7 +573,6 @@ class ProductService {
     }
 
     private VersionView changed(ProductVersion version, String action, Map<String, ?> details) {
-        version.touch(CurrentUser.id(), calendar.now());
         versions.flush();
         audit.record(action, SUBJECT, version.getProductId(), version.getTenantCode(), details);
         return view(version);

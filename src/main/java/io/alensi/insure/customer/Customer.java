@@ -1,20 +1,19 @@
 package io.alensi.insure.customer;
 
-import java.time.Instant;
 import java.time.LocalDate;
 import java.util.UUID;
 
+import io.alensi.insure.platform.persistence.AuditedEntity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
-import jakarta.persistence.Version;
 
 @Entity
 @Table(schema = "customer", name = "customer")
-class Customer {
+class Customer extends AuditedEntity {
 
     enum Type { INDIVIDUAL, ORGANIZATION }
 
@@ -23,7 +22,6 @@ class Customer {
     @Id
     private UUID id;
 
-    private String tenantCode;
     private String customerNumber;
 
     @Enumerated(EnumType.STRING)
@@ -50,29 +48,15 @@ class Customer {
     @Enumerated(EnumType.STRING)
     private Status status;
 
-    @Version
-    private Long version;
-
-    private Instant createdAt;
-    private Instant updatedAt;
-    private UUID createdBy;
-    private UUID updatedBy;
-
     protected Customer() {
     }
 
-    Customer(UUID id, String tenantCode, String customerNumber, Type customerType, String unitCode, UUID actor,
-            Instant now) {
+    Customer(UUID id, String customerNumber, Type customerType, String unitCode) {
         this.id = id;
-        this.tenantCode = tenantCode;
         this.customerNumber = customerNumber;
         this.customerType = customerType;
         this.unitCode = unitCode;
         this.status = Status.ACTIVE;
-        this.createdAt = now;
-        this.updatedAt = now;
-        this.createdBy = actor;
-        this.updatedBy = actor;
     }
 
     void name(String firstName, String lastName, String organizationName) {
@@ -111,21 +95,12 @@ class Customer {
         this.status = Status.INACTIVE;
     }
 
-    void touch(UUID actor, Instant now) {
-        this.updatedBy = actor;
-        this.updatedAt = now;
-    }
-
     String displayName() {
         return customerType == Type.ORGANIZATION ? organizationName : firstName + " " + lastName;
     }
 
     UUID getId() {
         return id;
-    }
-
-    String getTenantCode() {
-        return tenantCode;
     }
 
     String getCustomerNumber() {
@@ -170,9 +145,5 @@ class Customer {
 
     Status getStatus() {
         return status;
-    }
-
-    long getVersion() {
-        return version;
     }
 }

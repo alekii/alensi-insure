@@ -3,6 +3,7 @@ package io.alensi.insure.product;
 import java.math.BigDecimal;
 import java.util.UUID;
 
+import io.alensi.insure.platform.persistence.TenantOwned;
 import io.alensi.insure.platform.web.Ids;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -21,12 +22,10 @@ import org.hibernate.type.SqlTypes;
  */
 @Entity
 @Table(schema = "product", name = "rating_factor")
-class RatingFactor {
+class RatingFactor extends TenantOwned {
 
     @Id
     private UUID id;
-
-    private String tenantCode;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "product_version_id")
@@ -56,7 +55,6 @@ class RatingFactor {
 
     RatingFactor attachTo(ProductVersion version) {
         this.productVersion = version;
-        this.tenantCode = version.getTenantCode();
         return this;
     }
 

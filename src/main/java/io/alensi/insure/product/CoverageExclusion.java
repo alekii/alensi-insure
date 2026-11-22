@@ -3,6 +3,7 @@ package io.alensi.insure.product;
 import java.util.List;
 import java.util.UUID;
 
+import io.alensi.insure.platform.persistence.TenantOwned;
 import io.alensi.insure.platform.web.Ids;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -20,12 +21,10 @@ import org.hibernate.type.SqlTypes;
  */
 @Entity
 @Table(schema = "product", name = "coverage_exclusion")
-class CoverageExclusion {
+class CoverageExclusion extends TenantOwned {
 
     @Id
     private UUID id;
-
-    private String tenantCode;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "product_version_id")
@@ -61,7 +60,6 @@ class CoverageExclusion {
 
     CoverageExclusion attachTo(ProductVersion version) {
         this.productVersion = version;
-        this.tenantCode = version.getTenantCode();
         return this;
     }
 

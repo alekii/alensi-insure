@@ -3,7 +3,6 @@ package io.alensi.insure.platform.audit;
 import java.time.Clock;
 import java.util.Map;
 
-import io.alensi.insure.platform.security.CurrentTenant;
 import io.alensi.insure.platform.security.CurrentUser;
 import io.alensi.insure.platform.web.CorrelationId;
 import org.springframework.stereotype.Component;
@@ -34,8 +33,9 @@ public class AuditLog {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public void record(String action, String subjectType, Object subjectId, String unitCode, Map<String, ?> details) {
-        events.save(new AuditEvent(CurrentTenant.require(), clock.instant(), "USER", CurrentUser.id().toString(),
-                action, subjectType, String.valueOf(subjectId), unitCode,
+        boolean user = CurrentUser.isSignedIn();
+        events.save(new AuditEvent(clock.instant(), user ? "USER" : "SYSTEM",
+                user ? CurrentUser.id().toString() : "system", action, subjectType, String.valueOf(subjectId), unitCode,
                 details == null || details.isEmpty() ? null : json.writeValueAsString(details),
                 CorrelationId.current()));
     }

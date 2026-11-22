@@ -2,6 +2,7 @@ package io.alensi.insure.product;
 
 import java.util.UUID;
 
+import io.alensi.insure.platform.persistence.TenantOwned;
 import io.alensi.insure.platform.web.Ids;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -18,14 +19,12 @@ import org.hibernate.type.SqlTypes;
 /** The condition must hold for a quote; when it fails the outcome applies (DECLINE or REFER). */
 @Entity
 @Table(schema = "product", name = "eligibility_rule")
-class EligibilityRule {
+class EligibilityRule extends TenantOwned {
 
     enum Outcome { DECLINE, REFER }
 
     @Id
     private UUID id;
-
-    private String tenantCode;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "product_version_id")
@@ -64,7 +63,6 @@ class EligibilityRule {
 
     EligibilityRule attachTo(ProductVersion version) {
         this.productVersion = version;
-        this.tenantCode = version.getTenantCode();
         return this;
     }
 
