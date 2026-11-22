@@ -190,7 +190,7 @@ Identity answers "may this person do this here?". These rules answer "may this p
 
 On operations marked with this rule, Alensi Flow may call with its own service token and `X-Acting-User: <identity user id>`. Insure then requires:
 
-1. The service holds `workflows.act` (*proposed*) on the record's unit or above.
+1. The service holds `workflows.act` on the record's unit or above.
 2. `X-Alensi-Tenant` is present, and the acting user is an active member of that tenant.
 3. The **acting user** holds every permission the operation requires, checked by Insure with its service account through `AlensiIdentityClient.permissionsOf(user, token, tenant)`. Limits are checked for the acting user too.
 4. All other rules apply to the acting user, not to Flow.
@@ -209,7 +209,7 @@ Problem type `segregation-of-duties`. No permission or role overrides it.
 
 ### review-level
 
-The claim's `minimumReviewLevel` (`STANDARD`, `SENIOR`, `INVESTIGATION`) is computed from rules and AI routing signals ([Claim Assessment](../flows/claim-assessment.md#6-routing-signals)), and can be raised by a person with `claims.escalate`. At `SENIOR` or `INVESTIGATION` the decider also needs `claims.approve-senior` (*proposed*), and it applies to rejections as well as approvals. Problem type `review-level-not-met`.
+The claim's `minimumReviewLevel` (`STANDARD`, `SENIOR`, `INVESTIGATION`) is computed from rules and AI routing signals ([Claim Assessment](../flows/claim-assessment.md#6-routing-signals)), and can be raised by a person with `claims.escalate`. At `SENIOR` or `INVESTIGATION` the decider also needs `claims.approve-senior`, and it applies to rejections as well as approvals. Problem type `review-level-not-met`.
 
 ### anomalies-resolved-for-investigation
 
@@ -237,7 +237,7 @@ Permission to call an endpoint doesn't mean seeing everything related to the rec
 | Payment methods, beneficiary accounts | Never stored or returned. Insure holds only Alensi Pay tokens |
 | Embedded records | A claim embeds its policy summary and a policy embeds its customer summary only if the caller can view them. Otherwise the embedded object is `{"id": "…", "restricted": true}` |
 | Child lists | `GET /customers/{id}/policies`, `/claims` and `/activity` leave out entries outside the caller's `policies.view` / `claims.view` scope |
-| Sensitive documents | `SENSITIVE` (identity documents) and `MEDICAL` documents are listed with their metadata. Downloading them or reading their extractions also needs `documents.sensitive.view` (*proposed*) |
+| Sensitive documents | `SENSITIVE` (identity documents) and `MEDICAL` documents are listed with their metadata. Downloading them or reading their extractions also needs `documents.sensitive.view` |
 | AI evidence | Evidence pointing at a document the caller can't open is returned with `withheld: true` and no excerpt |
 | AI assessments | Need `ai.recommendations.view` as well as view permission on the subject. Viewing a full assessment is audited |
 | Audit events | Filtered by `audit.view` scope. Tenant-wide events (products, knowledge) need `audit.view` on the tenant root |
@@ -384,16 +384,9 @@ Generated from `x-authorization` in [openapi.yaml](./openapi.yaml). Paths are re
 |---|---|---|---|
 | `GET` | `/audit-events` | — | list filtered by `audit.view` |
 
-## Catalog Changes Needed in Alensi Identity
+## Catalog Coverage
 
-The contract uses four permissions that `catalog/alensi-insure.json` doesn't have yet:
-
-| Permission | Description | Suggested roles |
-|---|---|---|
-| `claims.approve-senior` | Decide claims at `SENIOR` or `INVESTIGATION` review level | `regional-manager`, `head-of-claims` |
-| `documents.sensitive.view` | Download `SENSITIVE` and `MEDICAL` documents and read their extractions | `claims-adjuster`, `claims-officer`, `claims-investigator`, `head-of-claims`, `underwriter`, `senior-underwriter` |
-| `knowledge.manage` | Ingest and supersede knowledge-base documents (procedures, guidelines, wordings) | `product-manager`, `head-of-claims` |
-| `workflows.act` | Service-only: call Insure on behalf of an acting user | A `flow-service` role granted to the `alensi-flow` service account on the company target |
+Every permission this contract uses is in `catalog/alensi-insure.json`, including `claims.approve-senior` (`regional-manager`, `head-of-claims`), `documents.sensitive.view` (claims and underwriting roles), `knowledge.manage` (`product-manager`, `head-of-claims`) and `workflows.act`. `workflows.act` belongs to the `flow-service` role, which only a platform admin can grant, to the `alensi-flow` service account on each insurer's company target.
 
 These catalog permissions have no Insure v1 endpoint:
 
