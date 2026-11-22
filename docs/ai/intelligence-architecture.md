@@ -186,7 +186,7 @@ What is stored:
 - `input_hash` — SHA-256 of the pseudonymised input, proving what was sent without storing it.
 - Prompts and raw responses are **not** logged in production. In non-production, logging can be enabled per use case for debugging.
 
-Access to AI outputs is controlled by the same permissions as the underlying claim (`insure.ai.read` on the claim's branch), and viewing an assessment is audited.
+Access to AI outputs is controlled by the same permissions as the underlying claim (`ai.recommendations.view` plus view permission on the claim's unit), and viewing an assessment is audited.
 
 ## Observability
 

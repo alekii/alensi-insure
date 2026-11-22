@@ -15,7 +15,9 @@ All diagrams are [Mermaid](https://mermaid.js.org/) and render directly on GitHu
 | | [Component Diagram](architecture/component-diagram.md) | Modules inside the Insure application and their dependencies |
 | Database | [ERD](database/erd.md) | Entity relationships, grouped by module |
 | | [Data Dictionary](database/data-dictionary.md) | Every table and column, enums, and conventions |
-| API | [API Specification](api/api-spec.md) | REST endpoints, conventions, events published and consumed |
+| API | [API Specification](api/api-spec.md) | Conventions, events published and consumed, Pay and Flow contracts |
+| | [OpenAPI Contract](api/openapi.yaml) | Every endpoint, schema, and its `x-authorization` requirements |
+| | [Authorization and Data Scoping](api/authorization.md) | Tenants, record ownership, permission per endpoint, approval limits, domain rules |
 | AI | [Intelligence Architecture](ai/intelligence-architecture.md) | How the intelligence layer is structured and isolated |
 | | [RAG Architecture](ai/rag-architecture.md) | Policy knowledge ingestion, pgvector, retrieval |
 | | [Tool Calling](ai/tool-calling.md) | Tools exposed to models and how they are secured |

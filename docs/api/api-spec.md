@@ -2,7 +2,7 @@
 
 The REST API for Alensi Insure, the events it publishes and consumes, and the contracts it relies on with Alensi Identity, Flow, and Pay.
 
-This is the design contract. Once implemented, the OpenAPI document generated at `/v3/api-docs` is authoritative for request/response schemas, and this document remains the place for conventions, authorization, and integration behaviour.
+This document covers conventions, events, and integration contracts. The endpoint contract is [openapi.yaml](./openapi.yaml); who may call what is in [Authorization and Data Scoping](./authorization.md).
 
 ## Conventions
 
@@ -27,285 +27,55 @@ This is the design contract. Once implemented, the OpenAPI document generated at
 | `200` / `201` / `202` | Success / created / accepted for asynchronous processing |
 | `400` | Malformed request or field validation failure |
 | `401` | Missing or invalid token |
-| `403` | Authenticated but lacks the permission on the record's branch |
-| `404` | Not found **or** not visible to the caller (no existence leak across branches) |
+| `403` | Can see the record but lacks the permission, exceeds an approval limit, or a domain rule refuses the caller ([details](./authorization.md#404-or-403)) |
+| `404` | Not found, in another tenant, or not visible to the caller (no existence leak) |
 | `409` | Illegal state transition, e.g. deciding a claim that is `SUBMITTED` |
 | `412` | `If-Match` version mismatch |
 | `422` | Business rule violation, e.g. approved amount exceeds payable amount; or idempotency key reused with a different body |
 | `429` | Rate limit (AI endpoints) |
-| `503` | A required dependency (Identity, Pay) is unavailable |
+| `503` | A required dependency (Identity, Pay, model provider) is unavailable |
 
 ## Authentication and Authorization
 
-Authentication and authorization are provided by **Alensi Identity** ([ADR-0003](../decisions/0003-auth-via-alensi-identity.md)).
+Authentication and authorization are provided by **Alensi Identity** ([ADR-0003](../decisions/0003-auth-via-alensi-identity.md)). The full contract — tenants, record ownership, the permission each endpoint requires, approval limits, domain rules, and response-level scoping — is in **[Authorization and Data Scoping](./authorization.md)**.
 
 ### Tokens
 
-Insure is an OAuth2 resource server. Every request carries `Authorization: Bearer <JWT>` issued by the Keycloak realm `alensi` with audience `alensi-insure`. Insure validates signature (JWKS), issuer, audience, and expiry locally. The `sub` claim is the user ID used throughout Insure.
+Insure is an OAuth2 resource server. Every request carries `Authorization: Bearer <JWT>` issued by the Keycloak realm `alensi` with audience `alensi-insure`. Insure validates signature (JWKS), issuer, audience, and expiry locally.
 
 | Caller | Grant | Keycloak client |
 |---|---|---|
-| Web console (staff) | Authorization code + PKCE | `alensi-web` |
-| Alensi Flow | Client credentials | `alensi-flow` |
+| Staff web app | Authorization code + PKCE, MFA enforced | `alensi-insure-web` |
+| Alensi Flow | Client credentials, plus `X-Acting-User` | `alensi-flow` |
 | Insure → Identity, Insure → Pay | Client credentials | `alensi-insure` |
+
+### Tenant
+
+Each insurer is a tenant. A request acts in the tenant named by the token's `organization` claim or the `X-Alensi-Tenant` header, and every record lookup is filtered by it.
 
 ### Permissions
 
-Insure registers the application `alensi-insure` in Identity with the permissions below. Roles (bundles of permissions) and grants (role + user + target) are managed in Identity, not Insure.
-
-| Permission | Allows |
-|---|---|
-| `insure.customers.read` | View customers and their activity |
-| `insure.customers.write` | Register and update customers |
-| `insure.products.read` | View products |
-| `insure.products.manage` | Create, publish, withdraw product versions |
-| `insure.policies.read` | View policies, coverages, insured items |
-| `insure.policies.write` | Quote, accept, renew |
-| `insure.policies.cancel` | Cancel policies |
-| `insure.underwriting.decide` | Record underwriting decisions |
-| `insure.premiums.read` | View schedules, installments, payment references |
-| `insure.premiums.collect` | Initiate premium collection |
-| `insure.premiums.adjust` | Create premium adjustments |
-| `insure.claims.read` | View claims |
-| `insure.claims.submit` | Submit claims, add items, withdraw |
-| `insure.claims.assess` | Run coverage checks, record assessed amounts, request information |
-| `insure.claims.decide` | Record claim decisions at `STANDARD` review level |
-| `insure.claims.decide-senior` | Record claim decisions at `SENIOR` and `INVESTIGATION` levels |
-| `insure.claims.settle` | Initiate settlements |
-| `insure.documents.read` | Download `STANDARD` documents |
-| `insure.documents.read-sensitive` | Download `SENSITIVE` and `MEDICAL` documents |
-| `insure.documents.write` | Upload documents, verify extractions |
-| `insure.ai.read` | View AI assessments and evidence |
-| `insure.ai.request` | Request AI re-assessment, coverage questions, assistant |
-| `insure.anomalies.investigate` | Change anomaly flag status |
-| `insure.knowledge.manage` | Ingest and supersede knowledge documents |
-| `insure.audit.read` | Read audit trails |
-| `insure.workflow.act` | Service-only: call commands on behalf of an acting user (granted to `alensi-flow`) |
-
-Suggested roles: `agent`, `underwriter`, `claims-handler`, `claims-manager`, `finance`, `fraud-investigator`, `product-manager`, `auditor`, `flow-service`.
-
-### Targets and Branch Scope
-
-Identity grants are scoped to targets in the hierarchy `country → region → branch`. Every customer, policy, and claim has a `branch_code`. A check for `insure.claims.decide` on claim `CLM-…` becomes "does the user hold `insure.claims.decide` on target `{claim.branch_code}` or any of its ancestors?"
-
-Insure calls Identity's permission API:
-
-```http
-GET /api/users/{userId}/applications/alensi-insure/permissions/{permission}/targets/{branchCode}
-```
-
-Results are cached in Redis for 60 seconds. List endpoints first fetch the branches where the user holds the read permission:
-
-```http
-GET /api/users/{userId}/applications/alensi-insure/permissions/{permission}/targets
-```
-
-and filter queries by `branch_code IN (...)`. If Identity is unavailable and no cached result exists, the request fails closed with `503`.
-
-### Acting on Behalf of a User (Flow)
-
-Human tasks live in Flow. When a user completes a task, Flow calls Insure with its own service token and the acting user:
-
-```http
-POST /api/v1/claims/{id}/decisions
-Authorization: Bearer <alensi-flow client-credentials token>
-X-Acting-User: 4f1c…            # Identity user ID who completed the task
-X-Flow-Task-Id: task-81723
-```
-
-Insure then requires **both**:
-
-1. The service has `insure.workflow.act`.
-2. The acting user has the command's own permission (e.g. `insure.claims.decide`) on the record's branch.
-
-Both identities are written to the audit trail (`actor_id` = `alensi-flow`, `on_behalf_of` = acting user). `X-Acting-User` is ignored on user tokens. Replacing this header with OAuth2 token exchange is a recorded follow-up in [ADR-0003](../decisions/0003-auth-via-alensi-identity.md).
+Permission codes are registered by application `alensi-insure` in Identity's catalog (`catalog/alensi-insure.json`), e.g. `claims.view`, `claims.approve`. Permissions are granted through roles on targets (`company → country → region → branch → team`); each record is owned by a unit (team or branch) and checks are made on it. Some permissions (`claims.approve`, `claims.settle`, `policies.underwrite`, `premiums.adjust`) carry per-currency amount limits.
 
 ---
 
 ## Endpoints
 
-Permissions are listed per endpoint. All record-level permissions are checked against the record's branch.
+The endpoint contract is **[openapi.yaml](./openapi.yaml)** (OpenAPI 3.1): paths, request and response schemas, examples, and an `x-authorization` block per operation. The [permission matrix](./authorization.md#permission-matrix) lists the requirements for every endpoint.
 
-### Customers
+Once implemented, the OpenAPI document served at `/v3/api-docs` must match this contract; a contract test compares the two in CI.
 
-| Method | Path | Permission | Description |
-|---|---|---|---|
-| `POST` | `/customers` | `customers.write` | Register a customer. Rejects duplicates by national ID hash (`409` with the existing customer ID if visible) |
-| `GET` | `/customers` | `customers.read` | Search by `customerNumber`, `name`, `phone`, `nationalId` (hashed server-side), `branchCode` |
-| `GET` | `/customers/{id}` | `customers.read` | Customer profile. National ID returned masked (`****5678`) |
-| `PATCH` | `/customers/{id}` | `customers.write` | Update contact details (JSON Merge Patch). Requires `If-Match` |
-| `POST` | `/customers/{id}/deactivate` | `customers.write` | Only if no active policies or open claims |
-| `GET` | `/customers/{id}/policies` | `policies.read` | |
-| `GET` | `/customers/{id}/claims` | `claims.read` | |
-| `GET` | `/customers/{id}/activity` | `customers.read` | Timeline |
-
-### Products
-
-| Method | Path | Permission | Description |
-|---|---|---|---|
-| `POST` | `/products` | `products.manage` | Create a product |
-| `GET` | `/products` | `products.read` | List products with their current published version |
-| `POST` | `/products/{id}/versions` | `products.manage` | Create a `DRAFT` version, optionally copying an existing one |
-| `GET` | `/products/{id}/versions/{versionNumber}` | `products.read` | Full version: coverages, exclusions, eligibility, rating |
-| `PUT` | `/products/{id}/versions/{versionNumber}` | `products.manage` | Replace a `DRAFT` version's configuration. `409` if published |
-| `POST` | `/products/{id}/versions/{versionNumber}/publish` | `products.manage` | Validates and publishes; optionally links a policy wording document for RAG ingestion |
-| `POST` | `/products/{id}/versions/{versionNumber}/withdraw` | `products.manage` | Stops new sales on this version |
-
-Products are global (not branch-scoped); permission is checked on the root target.
-
-### Policies
-
-| Method | Path | Permission | Description |
-|---|---|---|---|
-| `POST` | `/policies/quotes` | `policies.write` | Create a quote. Evaluates eligibility and rating synchronously. Response status is `QUOTED`, `REFERRED`, or `DECLINED` with reasons |
-| `GET` | `/policies` | `policies.read` | Filter by `customerId`, `status`, `productCode`, `expiringBefore` |
-| `GET` | `/policies/{id}` | `policies.read` | Policy with insured items and coverages |
-| `POST` | `/policies/{id}/accept` | `policies.write` | Customer accepts a `QUOTED` policy → `PENDING_PAYMENT`; creates the premium schedule |
-| `POST` | `/policies/{id}/underwriting-decisions` | `underwriting.decide` | Record an underwriter's decision on a `REFERRED` policy (called by Flow) |
-| `POST` | `/policies/{id}/cancel` | `policies.cancel` | Body: `reason`, `effectiveDate`. Calculates pro-rata refund as a premium adjustment |
-| `POST` | `/policies/{id}/reinstate` | `policies.write` | Reinstate a `LAPSED` policy once arrears are paid |
-| `POST` | `/policies/{id}/renewals` | `policies.write` | Create a renewal quote on the current product version |
-| `GET` | `/policies/{id}/coverages` | `policies.read` | Coverages with limits, consumed and reserved amounts |
-| `GET` | `/policies/{id}/coverage-status?date=` | `policies.read` | Deterministic "is this policy in force on this date, and which coverages apply" |
-
-Example quote request:
-
-```json
-{
-  "customerId": "0192f3a4-…",
-  "productCode": "MOTOR-COMP",
-  "effectiveDate": "2026-12-01",
-  "paymentFrequency": "MONTHLY",
-  "insuredItems": [
-    {
-      "itemType": "VEHICLE",
-      "description": "Toyota Axio KDA 123A",
-      "sumInsured": { "amount": "1450000.00", "currency": "KES" },
-      "attributes": { "registration": "KDA 123A", "make": "Toyota", "model": "Axio", "yearOfManufacture": 2017, "use": "PRIVATE" }
-    }
-  ],
-  "coverages": ["OWN_DAMAGE", "THIRD_PARTY_PROPERTY", "THEFT"]
-}
-```
-
-Response (`201`):
-
-```json
-{
-  "id": "0192f3b0-…",
-  "policyNumber": "POL-2026-000418",
-  "status": "QUOTED",
-  "quoteExpiresAt": "2026-11-29T09:30:00Z",
-  "totalPremium": { "amount": "58000.00", "currency": "KES" },
-  "coverages": [
-    { "code": "OWN_DAMAGE", "limit": { "amount": "1450000.00", "currency": "KES" }, "deductible": { "type": "PERCENTAGE", "value": "2.5" }, "premium": { "amount": "43500.00", "currency": "KES" } }
-  ],
-  "rating": [
-    { "factor": "customer.age", "band": "25-35", "multiplier": "1.00" },
-    { "factor": "item.vehicle.age", "band": "6-10", "multiplier": "1.15" }
-  ],
-  "eligibility": []
-}
-```
-
-### Premiums
-
-| Method | Path | Permission | Description |
-|---|---|---|---|
-| `GET` | `/policies/{id}/premium-schedule` | `premiums.read` | Schedule with installments |
-| `POST` | `/installments/{id}/collections` | `premiums.collect` | Request collection through Alensi Pay. Body: `paymentMethod` (Pay method token or `MPESA_STK` with phone). Returns `202` with the payment reference |
-| `GET` | `/policies/{id}/payments` | `premiums.read` | Payment references (collections and refunds) with Pay status |
-| `POST` | `/policies/{id}/premium-adjustments` | `premiums.adjust` | Loading, discount, or endorsement; regenerates unpaid installments |
-
-### Claims
-
-| Method | Path | Permission | Description |
-|---|---|---|---|
-| `POST` | `/claims` | `claims.submit` | Submit a claim with items. Runs claim-level coverage checks synchronously; returns `201` even if not covered (the claim is recorded and reviewed) |
-| `GET` | `/claims` | `claims.read` | Filter by `status`, `policyId`, `customerId`, `assignedTo`, `priority`, `reportedFrom/To` |
-| `GET` | `/claims/{id}` | `claims.read` | Claim with items, latest coverage checks, open information requests, decision, settlements |
-| `POST` | `/claims/{id}/items` | `claims.submit` | Add an item while `SUBMITTED` or `INFORMATION_REQUESTED` |
-| `POST` | `/claims/{id}/coverage-checks` | `claims.assess` | Re-run the deterministic coverage engine |
-| `POST` | `/claims/{id}/information-requests` | `claims.assess` | Request documents or details → `INFORMATION_REQUESTED` |
-| `POST` | `/claims/{id}/information-requests/{reqId}/fulfil` | `claims.submit` | Mark fulfilled; when none remain open → `UNDER_ASSESSMENT` |
-| `POST` | `/claims/{id}/assessment` | `claims.assess` | Record assessed amounts per item; computes deductible and payable amounts → `AWAITING_DECISION` |
-| `POST` | `/claims/{id}/decisions` | `claims.decide` | Record the decision. Body: `decision`, `approvedAmount`, `reasonCode`, `rationale`, `aiAssessmentId`. Validates amount ≤ payable, four-eyes, review level, and reserves limit |
-| `POST` | `/claims/{id}/settlements` | `claims.settle` | Create a settlement and request payout via Pay. Body: `payeeType`, `payeeToken`, `amount` |
-| `POST` | `/claims/{id}/withdraw` | `claims.submit` | Withdraw before a decision |
-| `POST` | `/claims/{id}/close` | `claims.assess` | Close a `SETTLED` or `REJECTED` claim |
-| `GET` | `/claims/{id}/history` | `claims.read` | Status transitions and actions from the audit trail |
-
-Example decision request (from Flow):
-
-```json
-{
-  "decision": "PARTIALLY_APPROVED",
-  "approvedAmount": { "amount": "182000.00", "currency": "KES" },
-  "reasonCode": "PARTIAL_EXCLUSION",
-  "rationale": "Windscreen replacement covered. Pre-existing rear bumper damage excluded under 4.2(c) per assessor report.",
-  "aiAssessmentId": "0192f4c1-…"
-}
-```
-
-### Documents
-
-| Method | Path | Permission | Description |
-|---|---|---|---|
-| `POST` | `/{ownerType}/{ownerId}/documents` | `documents.write` | Register a document; returns a presigned upload URL. `ownerType` is `customers`, `policies`, or `claims` |
-| `POST` | `/documents/{id}/complete` | `documents.write` | Confirm upload; triggers virus scan, then extraction for supported types |
-| `GET` | `/{ownerType}/{ownerId}/documents` | `documents.read` | List metadata |
-| `GET` | `/documents/{id}/content` | `documents.read` or `documents.read-sensitive` | `302` to a 5-minute presigned download URL. Audited |
-| `GET` | `/documents/{id}/extractions` | `documents.read` | Extraction results |
-| `POST` | `/extractions/{id}/verify` | `documents.write` | Body: `status` (`VERIFIED`/`REJECTED`), optional corrected fields |
-
-### Intelligence
-
-All AI responses include `assessmentId`, `modelName`, `promptVersion`, `createdAt`, and an `advisory: true` marker.
-
-| Method | Path | Permission | Description |
-|---|---|---|---|
-| `GET` | `/claims/{id}/ai-assessments` | `ai.read` | Latest assessment of each type for the claim |
-| `GET` | `/ai-assessments/{id}` | `ai.read` | Full output with evidence and tool invocations. Viewing is audited |
-| `POST` | `/claims/{id}/ai-assessments` | `ai.request` | Re-run an assessment type; `202` with the pending assessment ID |
-| `POST` | `/ai-assessments/{id}/feedback` | `ai.read` | Rate an output |
-| `POST` | `/policies/{id}/coverage-questions` | `ai.request` + `policies.read` | Ask a question about a policy's coverage, answered with RAG and citations. Synchronous, 20 s timeout |
-| `POST` | `/claims/{id}/assistant/messages` | `ai.request` + `claims.read` | Claim assistant: answers questions about one claim using read-only tools. Synchronous, 30 s timeout |
-| `GET` | `/anomalies` | `anomalies.investigate` | Filter by `status`, `anomalyType`, `severityGte` |
-| `POST` | `/anomalies/{id}/status` | `anomalies.investigate` | Change status; `resolutionNote` required for `DISMISSED`/`CONFIRMED` |
-| `POST` | `/knowledge-documents` | `knowledge.manage` | Ingest a document (referencing an uploaded `documentId`); `202` |
-| `GET` | `/knowledge-documents` | `knowledge.manage` | List with status and chunk counts |
-| `POST` | `/knowledge-documents/{id}/supersede` | `knowledge.manage` | Mark superseded. Procedures and guidelines leave retrieval; product wordings stay retrievable for policies sold under that product version |
-
-Example coverage question:
-
-```json
-{ "question": "Is damage from driving through a flooded road covered?", "incidentDate": "2026-11-02" }
-```
-
-```json
-{
-  "assessmentId": "0192f5d2-…",
-  "advisory": true,
-  "answer": "Flood damage to the vehicle is covered under Own Damage, but section 4.2(f) excludes loss caused by deliberately driving into flood water against official warnings.",
-  "authoritativeCoverage": {
-    "policyInForce": true,
-    "applicableCoverages": ["OWN_DAMAGE"],
-    "source": "coverage engine"
-  },
-  "citations": [
-    { "clauseReference": "3.1", "title": "Own Damage", "excerpt": "…loss of or damage to the insured vehicle caused by accidental collision, fire, flood…" },
-    { "clauseReference": "4.2(f)", "title": "General Exclusions", "excerpt": "…where the insured vehicle is driven into flood water contrary to…" }
-  ],
-  "confidence": "MEDIUM",
-  "requiresHumanInterpretation": true
-}
-```
-
-### Audit
-
-| Method | Path | Permission | Description |
-|---|---|---|---|
-| `GET` | `/audit-events` | `audit.read` | Filter by `subjectType`, `subjectId`, `actorId`, `action`, time range |
+| Resource | Base path | Module |
+|---|---|---|
+| Current user | `/me` | platform |
+| Customers | `/customers` | customer |
+| Products and versions | `/products` | product |
+| Quotes, policies, underwriting, renewals, cancellation | `/policies` | policy |
+| Premium schedules, adjustments, collections, payments | `/policies/{id}/premium-*`, `/installments`, `/policies/{id}/payments` | premium |
+| Claims, assessment, decisions, settlements | `/claims` | claims |
+| Documents and extractions | `/{owner}/{id}/documents`, `/documents`, `/extractions` | document |
+| AI assessments, coverage questions, assistant, anomalies, knowledge base | `/ai-assessments`, `/policies/{id}/coverage-questions`, `/claims/{id}/assistant`, `/anomalies`, `/knowledge-documents` | intelligence |
+| Audit trail | `/audit-events` | platform |
 
 ---
 
@@ -327,7 +97,8 @@ Published to the `insure.events` topic exchange with routing key equal to `type`
     "claimId": "0192f4b2-…",
     "claimNumber": "CLM-2026-000917",
     "policyId": "0192f3b0-…",
-    "branchCode": "KE-NBO-WESTLANDS",
+    "tenantCode": "JUB",
+    "unitCode": "JUB-KE-NRB-WLD",
     "incidentType": "COLLISION",
     "claimedAmount": { "amount": "240000.00", "currency": "KES" },
     "coverageResult": "COVERED",
@@ -336,7 +107,7 @@ Published to the `insure.events` topic exchange with routing key equal to `type`
 }
 ```
 
-Event payloads carry IDs, statuses, amounts, and branch codes — **never PII**. Consumers fetch details through the API with their own authorization.
+Event payloads carry IDs, statuses, amounts, tenant and unit codes — **never PII**. Consumers fetch details through the API with their own authorization.
 
 Delivery is at-least-once in commit order per aggregate. Consumers must de-duplicate by `id`.
 
@@ -361,6 +132,7 @@ Delivery is at-least-once in commit order per aggregate. Consumers must de-dupli
 | `insure.claim.information-requested` | Information requested | Flow: customer notification, reminder timer |
 | `insure.claim.information-received` | All requests fulfilled | Flow: resume; worker: re-assess |
 | `insure.claim.assessed` | Adjuster recorded assessment | **Flow**: route to approval chain |
+| `insure.claim.escalated` | Review level raised by a person | Flow: re-route the approval task |
 | `insure.claim.decided` | Decision recorded | Flow: notify, settlement step |
 | `insure.claim.settlement-initiated` | Payout requested from Pay | |
 | `insure.claim.settled` | Payout succeeded | Flow: close |
@@ -398,7 +170,7 @@ Idempotency-Key: insure:COLLECTION:0192f3c9-…:1
   "amount": { "amount": "4833.33", "currency": "KES" },
   "paymentMethod": { "type": "MPESA_STK", "phone": "+2547…" },
   "reference": "POL-2026-000418/INST-3",
-  "metadata": { "sourceSystem": "alensi-insure", "sourceType": "INSTALLMENT", "sourceId": "0192f3c9-…" }
+  "metadata": { "sourceSystem": "alensi-insure", "tenantCode": "JUB", "sourceType": "INSTALLMENT", "sourceId": "0192f3c9-…" }
 }
 ```
 
@@ -406,19 +178,20 @@ Idempotency-Key: insure:COLLECTION:0192f3c9-…:1
 |---|---|
 | Idempotency keys | Insure retries on timeout without double-charging or double-paying |
 | Payment ID in the synchronous response | Insure links its payment reference before any event arrives |
-| Status events on RabbitMQ carrying `metadata` back | Insure correlates outcomes without polling |
+| Status events on RabbitMQ carrying `metadata` back | Insure correlates outcomes without polling, and sets the tenant from `metadata.tenantCode` before any database access ([Row-Level Security](./authorization.md#row-level-security)) |
 | Beneficiary tokens for payouts | Insure never stores bank or mobile-money account details |
 | `GET /payments/{id}` | Reconciling `UNKNOWN` references after an outage |
 
 ## Alensi Flow Contract
 
-Flow subscribes to the events marked **Flow** above and drives these Insure commands as the acting user:
+Flow subscribes to the events marked **Flow** above and drives these Insure commands as the acting user. Its service account needs `workflows.act`, it sends `X-Alensi-Tenant` from the event's `tenantCode`, and the acting user needs the command's own permissions ([flow-acting-user](./authorization.md#flow-acting-user)):
 
 | Flow step | Insure command |
 |---|---|
 | Underwriting review task completed | `POST /policies/{id}/underwriting-decisions` |
 | Adjuster requests information | `POST /claims/{id}/information-requests` |
 | Adjuster completes assessment | `POST /claims/{id}/assessment` |
+| Reviewer raises the review level | `POST /claims/{id}/escalations` |
 | Final approver decides | `POST /claims/{id}/decisions` |
 | Finance releases payment | `POST /claims/{id}/settlements` |
 | Investigator resolves anomaly | `POST /anomalies/{id}/status` |

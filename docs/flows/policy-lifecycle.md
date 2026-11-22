@@ -39,7 +39,7 @@ stateDiagram-v2
 | From → To | Trigger | Actor | Rules enforced by Insure | Event |
 |---|---|---|---|---|
 | — → `QUOTED` / `REFERRED` / `DECLINED` | `POST /policies/quotes` | Agent | Product version published and effective; customer active; insured items valid for item type; eligibility rules evaluated; premium rated | `insure.policy.quoted` / `insure.policy.referred` |
-| `REFERRED` → `QUOTED` / `DECLINED` | `POST /policies/{id}/underwriting-decisions` | Underwriter via Flow | Acting user has `insure.underwriting.decide`; loading re-rates the premium | `insure.policy.underwritten` |
+| `REFERRED` → `QUOTED` / `DECLINED` | `POST /policies/{id}/underwriting-decisions` | Underwriter via Flow | Acting user has `policies.underwrite` with a limit covering the total sum insured; loading re-rates the premium | `insure.policy.underwritten` |
 | `QUOTED` → `PENDING_PAYMENT` | `POST /policies/{id}/accept` | Agent | Quote not expired; creates premium schedule | — |
 | `QUOTED` → `QUOTE_EXPIRED` | Scheduler | System | `quote_expires_at` passed (default 7 days) | — |
 | `PENDING_PAYMENT` → `QUOTE_EXPIRED` | Scheduler | System | First installment unpaid 14 days after acceptance; schedule cancelled | — |

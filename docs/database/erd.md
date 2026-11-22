@@ -56,7 +56,7 @@ erDiagram
         varchar address_line1
         varchar city
         char country_code
-        varchar branch_code "Identity target"
+        varchar unit_code "Identity target"
         varchar status "ACTIVE | INACTIVE"
     }
     CUSTOMER_ACTIVITY {
@@ -154,7 +154,7 @@ erDiagram
         decimal total_premium
         char currency
         varchar payment_frequency
-        varchar branch_code
+        varchar unit_code
         uuid renewed_from_policy_id FK
         timestamptz quote_expires_at
         timestamptz issued_at
@@ -264,7 +264,7 @@ erDiagram
         char currency
         varchar priority
         uuid assigned_to
-        varchar branch_code
+        varchar unit_code
         varchar minimum_review_level
         varchar flow_process_id
     }

@@ -430,7 +430,7 @@ The two layers interact through explicit application interfaces.
 
 Sensitive customer and insurance data must not be exposed unnecessarily to AI providers.
 
-Authentication and authorization are provided by [Alensi Identity](https://github.com/alekii/alensi-identity), with access scoped to branches through Identity's permission targets.
+Authentication and authorization are provided by [Alensi Identity](https://github.com/alekii/alensi-identity), with access scoped by insurer (tenant) and by team, branch or region through Identity's permission targets, and amount limits on approvals. See [Authorization and Data Scoping](docs/api/authorization.md).
 
 The platform will apply:
 
@@ -591,7 +591,7 @@ Architecture and engineering documentation is maintained alongside the implement
 |---|---|
 | Architecture | [System Context](docs/architecture/system-context.md) · [Containers](docs/architecture/container-diagram.md) · [Components](docs/architecture/component-diagram.md) |
 | Database | [ERD](docs/database/erd.md) · [Data Dictionary](docs/database/data-dictionary.md) |
-| API | [API Specification](docs/api/api-spec.md) |
+| API | [API Specification](docs/api/api-spec.md), [OpenAPI Contract](docs/api/openapi.yaml), [Authorization and Data Scoping](docs/api/authorization.md) |
 | AI | [Intelligence Architecture](docs/ai/intelligence-architecture.md) · [RAG](docs/ai/rag-architecture.md) · [Tool Calling](docs/ai/tool-calling.md) · [AI Decisioning](docs/ai/ai-decisioning.md) |
 | Flows | [Policy Lifecycle](docs/flows/policy-lifecycle.md) · [Claim Lifecycle](docs/flows/claim-lifecycle.md) · [Claim Assessment](docs/flows/claim-assessment.md) |
 | Decisions | [Architecture Decision Records](docs/decisions/README.md) |

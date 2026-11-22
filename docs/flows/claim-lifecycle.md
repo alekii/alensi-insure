@@ -54,7 +54,7 @@ stateDiagram-v2
 | `INFORMATION_REQUESTED` → `UNDER_ASSESSMENT` | `POST …/information-requests/{id}/fulfil` (last one) | Agent | All requests `FULFILLED` or `CANCELLED` | `insure.claim.information-received` |
 | `UNDER_ASSESSMENT` → `AWAITING_DECISION` | `POST /claims/{id}/assessment` | Handler via Flow | Every item has an assessed amount and a coverage result other than `PENDING`; deductibles and payable amounts computed; no open information requests | `insure.claim.assessed` |
 | `AWAITING_DECISION` → `UNDER_ASSESSMENT` | Flow "send back" calls `POST /claims/{id}/information-requests` or re-opens assessment | Approver via Flow | Reason required | — |
-| `AWAITING_DECISION` → decision state | `POST /claims/{id}/decisions` | Approver via Flow | Acting user holds the decide permission required by the claim's `minimum_review_level` (see [Claim Assessment](claim-assessment.md#6-routing-signals)) on the branch and is **not** the handler who recorded the assessment (four-eyes); `approvedAmount ≤ Σ payable`; `REJECTED` requires a reason code; limit reserved atomically | `insure.claim.decided` |
+| `AWAITING_DECISION` → decision state | `POST /claims/{id}/decisions` | Approver via Flow | Acting user holds `claims.approve` with a limit covering `approvedAmount` (or `claims.reject`), plus what the claim's `minimum_review_level` requires (see [Claim Assessment](claim-assessment.md#6-routing-signals)), on the claim's unit, and is **not** the submitter or the assessor (four-eyes); `approvedAmount ≤ Σ payable`; `REJECTED` requires a reason code; limit reserved atomically | `insure.claim.decided` |
 | → `SETTLEMENT_IN_PROGRESS` | `POST /claims/{id}/settlements` | Finance via Flow | Σ settlements ≤ approved amount; payee token present | `insure.claim.settlement-initiated` |
 | `SETTLEMENT_IN_PROGRESS` → `SETTLED` | `pay.payment.succeeded` | Pay | Σ paid settlements = approved amount; reserved limit moved to consumed | `insure.claim.settled` |
 | → `CLOSED` | `POST /claims/{id}/close` | Handler via Flow | `SETTLED` or `REJECTED` | `insure.claim.closed` |
@@ -136,7 +136,7 @@ Two claims on the same policy can be decided at the same time. To keep `AGGREGAT
 
 ## Timelines
 
-Flow owns SLA timers and escalation. Insure supplies the facts Flow needs in events: `reportedAt`, `priority`, `minimumReviewLevel`, `claimedAmount`, `branchCode`. Typical configuration: acknowledge within 1 business day, decide within 15 business days of the last information received, pay within 5 business days of decision — but these are regulatory and business choices configured in Flow, not encoded in Insure.
+Flow owns SLA timers and escalation. Insure supplies the facts Flow needs in events: `reportedAt`, `priority`, `minimumReviewLevel`, `claimedAmount`, `tenantCode`, `unitCode`. Typical configuration: acknowledge within 1 business day, decide within 15 business days of the last information received, pay within 5 business days of decision — but these are regulatory and business choices configured in Flow, not encoded in Insure.
 
 ## Audit Trail
 

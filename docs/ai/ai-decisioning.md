@@ -49,7 +49,7 @@ Paying or refusing a claim has legal and financial consequences, and customers, 
 | Is the policy in force on the incident date? | Coverage engine | None |
 | Is the claim item covered? | Coverage engine (`COVERED` / `NOT_COVERED` / `PARTIALLY_COVERED`), or a human where the engine returns `NEEDS_REVIEW` | Surfaces relevant clauses and possible exclusion concerns |
 | How much is payable? | Adjuster's assessed amount → deterministic deductible and limit calculation | Summarises evidence for the adjuster; may extract amounts from invoices (verified by a human before use) |
-| Approve, partially approve, or reject? | A person with `insure.claims.decide` | Recommendation with reasons and evidence |
+| Approve, partially approve, or reject? | A person with `claims.approve` (within their amount limit) or `claims.reject` | Recommendation with reasons and evidence |
 | Who reviews and how many approvals? | Alensi Flow configuration | Provides routing signals that can **raise** the review level |
 | Is an anomaly real? | Fraud investigator | Explains deterministic flags |
 | Is this fraud? | Outside the system (investigation, legal) | None — the system never labels a claim fraudulent |

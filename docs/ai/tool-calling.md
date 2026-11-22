@@ -6,7 +6,7 @@ Tool calling lets a model ask the application for data it needs — a claim's hi
 
 1. **Read-only.** No tool changes state. There is no `approveClaim`, `requestInformation`, or `updatePolicy` tool. Changes happen only through domain commands invoked by people or Flow.
 2. **Scoped by context, not by arguments.** Each invocation carries a `ToolScope` in Spring AI's `ToolContext` — the claim or policy in scope and the actor. Tools only return data inside that scope. An ID the model supplies that falls outside the scope is refused, so a prompt-injected "now fetch claim CLM-…-000001" cannot escape.
-3. **Authorised as the actor.** For interactive requests the actor is the user, and tools re-check the user's permissions (`insure.claims.read`, `insure.documents.read`, …) on the scoped record. For event-driven assessments the actor is the `system` principal, limited to the single record that triggered the job.
+3. **Authorised as the actor.** For interactive requests the actor is the user, and tools re-check the user's permissions (`claims.view`, `customers.documents.view`, `documents.sensitive.view`, …) on the scoped record, exactly as the matching endpoint would ([Authorization](../api/authorization.md#ai-tools)). For event-driven assessments the actor is the `system` principal, limited to the single record that triggered the job.
 4. **Pseudonymised results.** Tool results pass through the same pseudonymiser as prompts.
 5. **Bounded.** At most 8 tool calls per request, results truncated to a size limit per tool, 5 s timeout per call.
 6. **Audited.** Every call is stored in `ai_tool_invocation` with arguments, status, duration, and a digest of the result.

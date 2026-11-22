@@ -1,0 +1,2130 @@
+openapi: 3.1.0
+info:
+  title: Alensi Insure API
+  version: 1.0.0-design
+  summary: Policy, premium, claims, document and AI-advisory API for insurers on the Alensi platform.
+  description: |
+    Design contract for Alensi Insure. Conventions (money, errors, idempotency, concurrency) are
+    described in [api-spec.md](./api-spec.md); authorization and data scoping in
+    [authorization.md](./authorization.md).
+
+    **Every operation declares its authorization in `x-authorization`:**
+
+    | Field | Meaning |
+    |---|---|
+    | `requires[]` | Permissions the caller must hold. All entries apply unless an entry has `when`. |
+    | `requires[].target` | The target the permission is checked on: `tenant` (the tenant's root target), a record (`customer`, `policy`, `claim`, `document`, `anomaly`, or `subject` for the record an AI assessment is about; checked on the record's `unitCode`), or `body.unitCode`. |
+    | `requires[].when` | The entry applies only if this condition holds. |
+    | `requires[].limit` | The permission is limited; the request field whose amount must be within the caller's approval limit. |
+    | `requires[].anyOf` | Holding any one of the listed permissions is enough. |
+    | `owner.view`, `owner.upload`, `owner.verify` | Document operations: the permission depends on the document's owner (customer, policy or claim); see authorization.md. |
+    | `subject.view` | AI assessments: the view permission of the assessed record. |
+    | `filter` | List operations: results are restricted to units where the caller holds this permission. |
+    | `rules[]` | Domain rules enforced in Insure on top of permissions. |
+
+    Permission codes are those of application `alensi-insure` in Alensi Identity
+    (`catalog/alensi-insure.json`). Codes marked *proposed* in authorization.md are not yet in the catalog.
+  contact:
+    name: Alensi
+    url: https://github.com/alekii/alensi-insure
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Local
+security:
+  - bearer: []
+tags:
+  - name: Session
+  - name: Customers
+  - name: Products
+  - name: Policies
+  - name: Premiums
+  - name: Claims
+  - name: Documents
+  - name: Intelligence
+  - name: Audit
+
+paths:
+  # ---------------------------------------------------------------- Session
+  /me:
+    get:
+      tags: [Session]
+      operationId: getCurrentUser
+      summary: Current user, tenant and effective Insure permissions
+      description: Used by the web app to show or hide actions. Not an authorization decision; every command re-checks.
+      x-authorization:
+        requires: []
+      parameters: [{ $ref: '#/components/parameters/Tenant' }]
+      responses:
+        '200':
+          description: The caller in the request's tenant
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CurrentUser' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ---------------------------------------------------------------- Customers
+  /customers:
+    post:
+      tags: [Customers]
+      operationId: registerCustomer
+      summary: Register a customer
+      description: Rejects duplicates by national ID hash with `409`, returning the existing customer ID only if the caller can view it.
+      x-authorization:
+        requires:
+          - { permission: customers.create, target: body.unitCode }
+      parameters: [{ $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CustomerCreate' }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Customer' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [Customers]
+      operationId: searchCustomers
+      summary: Search customers
+      x-authorization:
+        filter: customers.view
+      parameters:
+        - { $ref: '#/components/parameters/Tenant' }
+        - { name: customerNumber, in: query, schema: { type: string } }
+        - { name: name, in: query, schema: { type: string } }
+        - { name: phone, in: query, schema: { type: string } }
+        - { name: nationalId, in: query, description: Hashed server-side; never logged, schema: { type: string } }
+        - { name: unitCode, in: query, description: Narrows within the caller's scope, schema: { type: string } }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Size' }
+        - { $ref: '#/components/parameters/Sort' }
+      responses:
+        '200': { description: Page of customers, content: { application/json: { schema: { $ref: '#/components/schemas/CustomerPage' } } } }
+  /customers/{customerId}:
+    parameters: [{ $ref: '#/components/parameters/CustomerId' }, { $ref: '#/components/parameters/Tenant' }]
+    get:
+      tags: [Customers]
+      operationId: getCustomer
+      summary: Customer profile
+      description: National ID is always masked (`****5678`).
+      x-authorization:
+        requires:
+          - { permission: customers.view, target: customer }
+      responses:
+        '200':
+          description: Customer
+          headers: { ETag: { $ref: '#/components/headers/ETag' } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/Customer' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Customers]
+      operationId: updateCustomer
+      summary: Update contact details (JSON Merge Patch)
+      x-authorization:
+        requires:
+          - { permission: customers.update, target: customer }
+      parameters: [{ $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema: { $ref: '#/components/schemas/CustomerUpdate' }
+      responses:
+        '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/Customer' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+  /customers/{customerId}/deactivate:
+    post:
+      tags: [Customers]
+      operationId: deactivateCustomer
+      summary: Deactivate a customer with no active policies or open claims
+      x-authorization:
+        requires:
+          - { permission: customers.update, target: customer }
+      parameters: [{ $ref: '#/components/parameters/CustomerId' }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IfMatch' }]
+      responses:
+        '200': { description: Deactivated, content: { application/json: { schema: { $ref: '#/components/schemas/Customer' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /customers/{customerId}/policies:
+    get:
+      tags: [Customers]
+      operationId: listCustomerPolicies
+      summary: The customer's policies
+      description: Policies owned by units outside the caller's `policies.view` scope are left out.
+      x-authorization:
+        requires:
+          - { permission: customers.view, target: customer }
+        filter: policies.view
+      parameters: [{ $ref: '#/components/parameters/CustomerId' }, { $ref: '#/components/parameters/Tenant' }]
+      responses:
+        '200': { description: Policies, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/PolicySummary' } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /customers/{customerId}/claims:
+    get:
+      tags: [Customers]
+      operationId: listCustomerClaims
+      summary: The customer's claims
+      x-authorization:
+        requires:
+          - { permission: customers.view, target: customer }
+        filter: claims.view
+      parameters: [{ $ref: '#/components/parameters/CustomerId' }, { $ref: '#/components/parameters/Tenant' }]
+      responses:
+        '200': { description: Claims, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/ClaimSummary' } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /customers/{customerId}/activity:
+    get:
+      tags: [Customers]
+      operationId: getCustomerActivity
+      summary: Activity timeline
+      description: Entries about policies or claims outside the caller's view scope are left out.
+      x-authorization:
+        requires:
+          - { permission: customers.view, target: customer }
+      parameters: [{ $ref: '#/components/parameters/CustomerId' }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/Page' }, { $ref: '#/components/parameters/Size' }]
+      responses:
+        '200': { description: Timeline, content: { application/json: { schema: { $ref: '#/components/schemas/ActivityPage' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------------- Products
+  /products:
+    post:
+      tags: [Products]
+      operationId: createProduct
+      summary: Create a product
+      x-authorization:
+        requires:
+          - { permission: products.manage, target: tenant }
+      parameters: [{ $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ProductCreate' } } }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Product' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [Products]
+      operationId: listProducts
+      summary: Products with their current published version
+      x-authorization:
+        requires:
+          - { permission: products.view, target: tenant }
+      parameters: [{ $ref: '#/components/parameters/Tenant' }, { name: status, in: query, schema: { type: string, enum: [ACTIVE, RETIRED] } }]
+      responses:
+        '200': { description: Products, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Product' } } } } }
+  /products/{productId}:
+    get:
+      tags: [Products]
+      operationId: getProduct
+      summary: Product with its versions
+      x-authorization:
+        requires:
+          - { permission: products.view, target: tenant }
+      parameters: [{ $ref: '#/components/parameters/ProductId' }, { $ref: '#/components/parameters/Tenant' }]
+      responses:
+        '200': { description: Product, content: { application/json: { schema: { $ref: '#/components/schemas/Product' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /products/{productId}/versions:
+    post:
+      tags: [Products]
+      operationId: createProductVersion
+      summary: Create a DRAFT version, optionally copying an existing one
+      x-authorization:
+        requires:
+          - { permission: products.manage, target: tenant }
+      parameters: [{ $ref: '#/components/parameters/ProductId' }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                copyFromVersion: { type: integer, minimum: 1 }
+      responses:
+        '201': { description: Draft created, content: { application/json: { schema: { $ref: '#/components/schemas/ProductVersion' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /products/{productId}/versions/{versionNumber}:
+    get:
+      tags: [Products]
+      operationId: getProductVersion
+      summary: "Full version: coverages, exclusions, eligibility, rating"
+      x-authorization:
+        requires:
+          - { permission: products.view, target: tenant }
+      parameters: [{ $ref: '#/components/parameters/ProductId' }, { $ref: '#/components/parameters/VersionNumber' }, { $ref: '#/components/parameters/Tenant' }]
+      responses:
+        '200': { description: Version, content: { application/json: { schema: { $ref: '#/components/schemas/ProductVersion' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /products/{productId}/versions/{versionNumber}/rating:
+    put:
+      tags: [Products]
+      operationId: replaceProductRating
+      summary: Replace a DRAFT version's rating factors and base rates
+      x-authorization:
+        requires:
+          - { permission: products.manage, target: tenant }
+        rules: [draft-only]
+      parameters: [{ $ref: '#/components/parameters/ProductId' }, { $ref: '#/components/parameters/VersionNumber' }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/Rating' } } }
+      responses:
+        '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/ProductVersion' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /products/{productId}/versions/{versionNumber}/coverages:
+    put:
+      tags: [Products]
+      operationId: replaceProductCoverages
+      summary: Replace a DRAFT version's coverages, limits, deductibles and exclusions
+      x-authorization:
+        requires:
+          - { permission: coverage.manage, target: tenant }
+        rules: [draft-only]
+      parameters: [{ $ref: '#/components/parameters/ProductId' }, { $ref: '#/components/parameters/VersionNumber' }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CoverageConfiguration' } } }
+      responses:
+        '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/ProductVersion' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /products/{productId}/versions/{versionNumber}/eligibility:
+    put:
+      tags: [Products]
+      operationId: replaceProductEligibility
+      summary: Replace a DRAFT version's eligibility rules
+      x-authorization:
+        requires:
+          - { permission: coverage.manage, target: tenant }
+        rules: [draft-only]
+      parameters: [{ $ref: '#/components/parameters/ProductId' }, { $ref: '#/components/parameters/VersionNumber' }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: array, items: { $ref: '#/components/schemas/EligibilityRule' } }
+      responses:
+        '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/ProductVersion' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /products/{productId}/versions/{versionNumber}/publish:
+    post:
+      tags: [Products]
+      operationId: publishProductVersion
+      summary: Validate and publish; optionally register the policy wording for RAG
+      x-authorization:
+        requires:
+          - { permission: products.manage, target: tenant }
+        rules: [draft-only]
+      parameters: [{ $ref: '#/components/parameters/ProductId' }, { $ref: '#/components/parameters/VersionNumber' }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                wordingDocumentId: { type: string, format: uuid }
+                effectiveFrom: { type: string, format: date }
+      responses:
+        '200': { description: Published, content: { application/json: { schema: { $ref: '#/components/schemas/ProductVersion' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/BusinessRule' }
+  /products/{productId}/versions/{versionNumber}/withdraw:
+    post:
+      tags: [Products]
+      operationId: withdrawProductVersion
+      summary: Stop new sales on this version
+      x-authorization:
+        requires:
+          - { permission: products.manage, target: tenant }
+      parameters: [{ $ref: '#/components/parameters/ProductId' }, { $ref: '#/components/parameters/VersionNumber' }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IfMatch' }]
+      responses:
+        '200': { description: Withdrawn, content: { application/json: { schema: { $ref: '#/components/schemas/ProductVersion' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ---------------------------------------------------------------- Policies
+  /policies/quotes:
+    post:
+      tags: [Policies]
+      operationId: createQuote
+      summary: Create a quote
+      description: |
+        Evaluates eligibility and rating synchronously. The resulting status is `QUOTED`,
+        `REFERRED` (needs underwriting) or `DECLINED`, with reasons. `unitCode` defaults to the
+        customer's unit.
+      x-authorization:
+        requires:
+          - { permission: policies.quote, target: body.unitCode }
+          - { permission: customers.view, target: customer }
+          - { permission: products.view, target: tenant }
+      parameters: [{ $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/QuoteRequest' }
+            example:
+              customerId: 0192f3a4-7c1e-7a10-9a3b-3f1d2c4b5a60
+              unitCode: JUB-KE-NRB-NWS-T1
+              productCode: MOTOR-COMP
+              effectiveDate: '2026-12-01'
+              paymentFrequency: MONTHLY
+              insuredItems:
+                - itemType: VEHICLE
+                  description: Toyota Axio KDA 123A
+                  sumInsured: { amount: '1450000.00', currency: KES }
+                  attributes: { registration: KDA 123A, make: Toyota, model: Axio, yearOfManufacture: 2017, use: PRIVATE }
+              coverages: [OWN_DAMAGE, THIRD_PARTY_PROPERTY, THEFT]
+      responses:
+        '201': { description: Quote, content: { application/json: { schema: { $ref: '#/components/schemas/Policy' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/BusinessRule' }
+  /policies:
+    get:
+      tags: [Policies]
+      operationId: searchPolicies
+      summary: Search policies
+      x-authorization:
+        filter: policies.view
+      parameters:
+        - { $ref: '#/components/parameters/Tenant' }
+        - { name: customerId, in: query, schema: { type: string, format: uuid } }
+        - { name: policyNumber, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/PolicyStatus' } }
+        - { name: productCode, in: query, schema: { type: string } }
+        - { name: expiringBefore, in: query, schema: { type: string, format: date } }
+        - { name: unitCode, in: query, schema: { type: string } }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Size' }
+        - { $ref: '#/components/parameters/Sort' }
+      responses:
+        '200': { description: Page of policies, content: { application/json: { schema: { $ref: '#/components/schemas/PolicyPage' } } } }
+  /policies/{policyId}:
+    get:
+      tags: [Policies]
+      operationId: getPolicy
+      summary: Policy with insured items and coverages
+      x-authorization:
+        requires:
+          - { permission: policies.view, target: policy }
+      parameters: [{ $ref: '#/components/parameters/PolicyId' }, { $ref: '#/components/parameters/Tenant' }]
+      responses:
+        '200':
+          description: Policy
+          headers: { ETag: { $ref: '#/components/headers/ETag' } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/Policy' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /policies/{policyId}/accept:
+    post:
+      tags: [Policies]
+      operationId: acceptQuote
+      summary: Customer accepts a QUOTED policy → PENDING_PAYMENT
+      description: Creates the premium schedule. The policy becomes ACTIVE when the first installment is paid.
+      x-authorization:
+        requires:
+          - { permission: policies.issue, target: policy }
+      parameters: [{ $ref: '#/components/parameters/PolicyId' }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IfMatch' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      responses:
+        '200': { description: Accepted, content: { application/json: { schema: { $ref: '#/components/schemas/Policy' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /policies/{policyId}/underwriting-decisions:
+    post:
+      tags: [Policies]
+      operationId: recordUnderwritingDecision
+      summary: Record an underwriter's decision on a REFERRED policy
+      description: Normally called by Alensi Flow when the underwriting task is completed.
+      x-authorization:
+        requires:
+          - { permission: policies.underwrite, target: policy }
+          - { permission: policies.underwrite, target: policy, limit: policy.totalSumInsured, when: "decision in (ACCEPT, ACCEPT_WITH_LOADING)" }
+        rules: [flow-acting-user]
+      parameters: [{ $ref: '#/components/parameters/PolicyId' }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IfMatch' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/ActingUser' }, { $ref: '#/components/parameters/FlowTaskId' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/UnderwritingDecisionRequest' } } }
+      responses:
+        '201': { description: Recorded, content: { application/json: { schema: { $ref: '#/components/schemas/Policy' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /policies/{policyId}/cancel:
+    post:
+      tags: [Policies]
+      operationId: cancelPolicy
+      summary: Cancel a policy; calculates the pro-rata refund as a premium adjustment
+      x-authorization:
+        requires:
+          - { permission: policies.cancel, target: policy }
+      parameters: [{ $ref: '#/components/parameters/PolicyId' }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IfMatch' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reasonCode, effectiveDate]
+              properties:
+                reasonCode: { type: string, enum: [CUSTOMER_REQUEST, MISREPRESENTATION, REPLACED, OTHER], description: NON_PAYMENT is set by the lapse process only }
+                effectiveDate: { type: string, format: date }
+                note: { type: string, maxLength: 2000 }
+      responses:
+        '200': { description: Cancelled, content: { application/json: { schema: { $ref: '#/components/schemas/Policy' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /policies/{policyId}/reinstate:
+    post:
+      tags: [Policies]
+      operationId: reinstatePolicy
+      summary: Reinstate a LAPSED policy once arrears are paid
+      x-authorization:
+        requires:
+          - { permission: policies.issue, target: policy }
+      parameters: [{ $ref: '#/components/parameters/PolicyId' }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IfMatch' }]
+      responses:
+        '200': { description: Reinstated, content: { application/json: { schema: { $ref: '#/components/schemas/Policy' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/BusinessRule' }
+  /policies/{policyId}/renewals:
+    post:
+      tags: [Policies]
+      operationId: createRenewalQuote
+      summary: Create a renewal quote on the current product version
+      x-authorization:
+        requires:
+          - { permission: policies.renew, target: policy }
+      parameters: [{ $ref: '#/components/parameters/PolicyId' }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      responses:
+        '201': { description: Renewal quote, content: { application/json: { schema: { $ref: '#/components/schemas/Policy' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /policies/{policyId}/coverages:
+    get:
+      tags: [Policies]
+      operationId: getPolicyCoverages
+      summary: Coverages with limits, consumed and reserved amounts
+      x-authorization:
+        requires:
+          - { permission: policies.view, target: policy }
+      parameters: [{ $ref: '#/components/parameters/PolicyId' }, { $ref: '#/components/parameters/Tenant' }]
+      responses:
+        '200': { description: Coverages, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/PolicyCoverage' } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /policies/{policyId}/coverage-status:
+    get:
+      tags: [Policies]
+      operationId: getCoverageStatus
+      summary: Is the policy in force on a date, and which coverages apply (deterministic)
+      x-authorization:
+        requires:
+          - { permission: policies.view, target: policy }
+      parameters:
+        - { $ref: '#/components/parameters/PolicyId' }
+        - { $ref: '#/components/parameters/Tenant' }
+        - { name: date, in: query, required: true, schema: { type: string, format: date } }
+      responses:
+        '200': { description: Coverage status, content: { application/json: { schema: { $ref: '#/components/schemas/CoverageStatus' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------------- Premiums
+  /policies/{policyId}/premium-schedule:
+    get:
+      tags: [Premiums]
+      operationId: getPremiumSchedule
+      summary: Premium schedule with installments
+      x-authorization:
+        requires:
+          - { permission: premiums.view, target: policy }
+      parameters: [{ $ref: '#/components/parameters/PolicyId' }, { $ref: '#/components/parameters/Tenant' }]
+      responses:
+        '200': { description: Schedule, content: { application/json: { schema: { $ref: '#/components/schemas/PremiumSchedule' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /policies/{policyId}/premium-adjustments:
+    post:
+      tags: [Premiums]
+      operationId: createPremiumAdjustment
+      summary: Loading, discount or endorsement; regenerates unpaid installments
+      x-authorization:
+        requires:
+          - { permission: premiums.adjust, target: policy, limit: abs(amount) }
+      parameters: [{ $ref: '#/components/parameters/PolicyId' }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IfMatch' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PremiumAdjustmentRequest' } } }
+      responses:
+        '201': { description: Adjustment, content: { application/json: { schema: { $ref: '#/components/schemas/PremiumSchedule' } } } }
+        '403': { $ref: '#/components/responses/LimitOrForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /policies/{policyId}/payments:
+    get:
+      tags: [Premiums]
+      operationId: listPolicyPayments
+      summary: Payment references (collections and refunds) with their Alensi Pay status
+      x-authorization:
+        requires:
+          - { permission: payments.view, target: policy }
+      parameters: [{ $ref: '#/components/parameters/PolicyId' }, { $ref: '#/components/parameters/Tenant' }]
+      responses:
+        '200': { description: Payments, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/PaymentReference' } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /installments/{installmentId}/collections:
+    post:
+      tags: [Premiums]
+      operationId: requestInstallmentCollection
+      summary: Request collection of an installment through Alensi Pay
+      description: Returns `202` with the payment reference. The installment is marked paid when `pay.payment.succeeded` arrives.
+      x-authorization:
+        requires:
+          - { permission: payments.record, target: policy }
+      parameters: [{ name: installmentId, in: path, required: true, schema: { type: string, format: uuid } }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CollectionRequest' } } }
+      responses:
+        '202': { description: Collection requested, content: { application/json: { schema: { $ref: '#/components/schemas/PaymentReference' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+
+  # ---------------------------------------------------------------- Claims
+  /claims:
+    post:
+      tags: [Claims]
+      operationId: submitClaim
+      summary: Submit a claim with items
+      description: |
+        Runs claim-level coverage checks synchronously and returns `201` even if not covered: the
+        claim is recorded and reviewed. The claim is owned by the policy's unit.
+      x-authorization:
+        requires:
+          - { permission: claims.submit, target: policy }
+          - { permission: policies.view, target: policy }
+      parameters: [{ $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ClaimSubmission' } } }
+      responses:
+        '201': { description: Claim, content: { application/json: { schema: { $ref: '#/components/schemas/Claim' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/BusinessRule' }
+    get:
+      tags: [Claims]
+      operationId: searchClaims
+      summary: Search claims
+      x-authorization:
+        filter: claims.view
+      parameters:
+        - { $ref: '#/components/parameters/Tenant' }
+        - { name: claimNumber, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/ClaimStatus' } }
+        - { name: policyId, in: query, schema: { type: string, format: uuid } }
+        - { name: customerId, in: query, schema: { type: string, format: uuid } }
+        - { name: assignedTo, in: query, schema: { type: string } }
+        - { name: priority, in: query, schema: { type: string, enum: [LOW, NORMAL, HIGH, URGENT] } }
+        - { name: minimumReviewLevel, in: query, schema: { $ref: '#/components/schemas/ReviewLevel' } }
+        - { name: reportedFrom, in: query, schema: { type: string, format: date } }
+        - { name: reportedTo, in: query, schema: { type: string, format: date } }
+        - { name: unitCode, in: query, schema: { type: string } }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Size' }
+        - { $ref: '#/components/parameters/Sort' }
+      responses:
+        '200': { description: Page of claims, content: { application/json: { schema: { $ref: '#/components/schemas/ClaimPage' } } } }
+  /claims/{claimId}:
+    get:
+      tags: [Claims]
+      operationId: getClaim
+      summary: Claim with items, latest coverage checks, open information requests, decision and settlements
+      x-authorization:
+        requires:
+          - { permission: claims.view, target: claim }
+      parameters: [{ $ref: '#/components/parameters/ClaimId' }, { $ref: '#/components/parameters/Tenant' }]
+      responses:
+        '200':
+          description: Claim
+          headers: { ETag: { $ref: '#/components/headers/ETag' } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/Claim' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /claims/{claimId}/items:
+    post:
+      tags: [Claims]
+      operationId: addClaimItem
+      summary: Add an item while SUBMITTED or INFORMATION_REQUESTED
+      x-authorization:
+        requires:
+          - { permission: claims.submit, target: claim }
+      parameters: [{ $ref: '#/components/parameters/ClaimId' }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IfMatch' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ClaimItemInput' } } }
+      responses:
+        '201': { description: Claim with the new item, content: { application/json: { schema: { $ref: '#/components/schemas/Claim' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /claims/{claimId}/coverage-checks:
+    post:
+      tags: [Claims]
+      operationId: runCoverageChecks
+      summary: Re-run the deterministic coverage engine
+      x-authorization:
+        requires:
+          - { permission: claims.assess, target: claim }
+      parameters: [{ $ref: '#/components/parameters/ClaimId' }, { $ref: '#/components/parameters/Tenant' }]
+      responses:
+        '200': { description: Coverage checks with rule trace, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/CoverageCheck' } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /claims/{claimId}/information-requests:
+    post:
+      tags: [Claims]
+      operationId: requestInformation
+      summary: Request documents or details → INFORMATION_REQUESTED
+      x-authorization:
+        requires:
+          - { permission: claims.assess, target: claim }
+        rules: [flow-acting-user]
+      parameters: [{ $ref: '#/components/parameters/ClaimId' }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IfMatch' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/ActingUser' }, { $ref: '#/components/parameters/FlowTaskId' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/InformationRequestInput' } } }
+      responses:
+        '201': { description: Requested, content: { application/json: { schema: { $ref: '#/components/schemas/Claim' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /claims/{claimId}/information-requests/{requestId}/fulfil:
+    post:
+      tags: [Claims]
+      operationId: fulfilInformationRequest
+      summary: Mark fulfilled; when none remain open → UNDER_ASSESSMENT
+      x-authorization:
+        requires:
+          - { permission: claims.submit, target: claim }
+      parameters: [{ $ref: '#/components/parameters/ClaimId' }, { name: requestId, in: path, required: true, schema: { type: string, format: uuid } }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                documentIds: { type: array, items: { type: string, format: uuid } }
+                note: { type: string, maxLength: 2000 }
+      responses:
+        '200': { description: Fulfilled, content: { application/json: { schema: { $ref: '#/components/schemas/Claim' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /claims/{claimId}/assessment:
+    post:
+      tags: [Claims]
+      operationId: recordAssessment
+      summary: Record assessed amounts per item → AWAITING_DECISION
+      description: Computes deductible and payable amounts per item.
+      x-authorization:
+        requires:
+          - { permission: claims.assess, target: claim }
+        rules: [flow-acting-user, segregation-of-duties]
+      parameters: [{ $ref: '#/components/parameters/ClaimId' }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IfMatch' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/ActingUser' }, { $ref: '#/components/parameters/FlowTaskId' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/AssessmentInput' } } }
+      responses:
+        '200': { description: Assessed, content: { application/json: { schema: { $ref: '#/components/schemas/Claim' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/BusinessRule' }
+  /claims/{claimId}/escalations:
+    post:
+      tags: [Claims]
+      operationId: escalateClaim
+      summary: Raise the claim's minimum review level
+      description: A person can raise the review level for a reason the rules and AI did not catch. It never lowers it.
+      x-authorization:
+        requires:
+          - { permission: claims.escalate, target: claim }
+        rules: [flow-acting-user, review-level-only-increases]
+      parameters: [{ $ref: '#/components/parameters/ClaimId' }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IfMatch' }, { $ref: '#/components/parameters/ActingUser' }, { $ref: '#/components/parameters/FlowTaskId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [level, reason]
+              properties:
+                level: { $ref: '#/components/schemas/ReviewLevel' }
+                reason: { type: string, minLength: 10, maxLength: 2000 }
+      responses:
+        '200': { description: Escalated, content: { application/json: { schema: { $ref: '#/components/schemas/Claim' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /claims/{claimId}/decisions:
+    post:
+      tags: [Claims]
+      operationId: decideClaim
+      summary: Record the claim decision
+      description: |
+        Validates the amount against the payable amount, segregation of duties and the claim's
+        review level, and reserves the approved amount against the coverage limit.
+
+        If the approved amount exceeds the caller's `claims.approve` limit, the response is `403`
+        with problem type `approval-limit-exceeded` and the caller's limits, so Flow can route the
+        task to someone whose limit covers it.
+      x-authorization:
+        requires:
+          - { permission: claims.approve, target: claim, limit: approvedAmount, when: "decision in (APPROVED, PARTIALLY_APPROVED)" }
+          - { permission: claims.reject, target: claim, when: "decision == REJECTED" }
+          - { permission: claims.approve-senior, target: claim, when: "claim.minimumReviewLevel in (SENIOR, INVESTIGATION)" }
+        rules: [flow-acting-user, segregation-of-duties, review-level, anomalies-resolved-for-investigation]
+      parameters: [{ $ref: '#/components/parameters/ClaimId' }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IfMatch' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/ActingUser' }, { $ref: '#/components/parameters/FlowTaskId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ClaimDecisionRequest' }
+            example:
+              decision: PARTIALLY_APPROVED
+              approvedAmount: { amount: '182000.00', currency: KES }
+              reasonCode: EXCLUSION_APPLIES
+              rationale: Windscreen replacement covered. Pre-existing rear bumper damage excluded under 4.2(c) per assessor report.
+              aiAssessmentId: 0192f4c1-1b2a-7c3d-8e4f-5a6b7c8d9e0f
+              aiAlignment: AGREED
+      responses:
+        '201': { description: Decision recorded, content: { application/json: { schema: { $ref: '#/components/schemas/Claim' } } } }
+        '403': { $ref: '#/components/responses/LimitOrForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/BusinessRule' }
+  /claims/{claimId}/settlements:
+    post:
+      tags: [Claims]
+      operationId: settleClaim
+      summary: Create a settlement and request the payout through Alensi Pay
+      x-authorization:
+        requires:
+          - { permission: claims.settle, target: claim, limit: amount }
+        rules: [flow-acting-user, segregation-of-duties]
+      parameters: [{ $ref: '#/components/parameters/ClaimId' }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IdempotencyKey' }, { $ref: '#/components/parameters/ActingUser' }, { $ref: '#/components/parameters/FlowTaskId' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/SettlementRequest' } } }
+      responses:
+        '202': { description: Payout requested, content: { application/json: { schema: { $ref: '#/components/schemas/Settlement' } } } }
+        '403': { $ref: '#/components/responses/LimitOrForbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/BusinessRule' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /claims/{claimId}/withdraw:
+    post:
+      tags: [Claims]
+      operationId: withdrawClaim
+      summary: Withdraw before a decision
+      x-authorization:
+        requires:
+          - { permission: claims.submit, target: claim }
+      parameters: [{ $ref: '#/components/parameters/ClaimId' }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, maxLength: 2000 }
+      responses:
+        '200': { description: Withdrawn, content: { application/json: { schema: { $ref: '#/components/schemas/Claim' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /claims/{claimId}/close:
+    post:
+      tags: [Claims]
+      operationId: closeClaim
+      summary: Close a SETTLED or REJECTED claim
+      x-authorization:
+        requires:
+          - { permission: claims.assess, target: claim }
+      parameters: [{ $ref: '#/components/parameters/ClaimId' }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IfMatch' }]
+      responses:
+        '200': { description: Closed, content: { application/json: { schema: { $ref: '#/components/schemas/Claim' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /claims/{claimId}/history:
+    get:
+      tags: [Claims]
+      operationId: getClaimHistory
+      summary: Status transitions and actions from the audit trail
+      x-authorization:
+        requires:
+          - { permission: claims.view, target: claim }
+      parameters: [{ $ref: '#/components/parameters/ClaimId' }, { $ref: '#/components/parameters/Tenant' }]
+      responses:
+        '200': { description: History, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/AuditEvent' } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------------- Documents
+  /customers/{customerId}/documents:
+    parameters: [{ $ref: '#/components/parameters/CustomerId' }, { $ref: '#/components/parameters/Tenant' }]
+    post:
+      tags: [Documents]
+      operationId: registerCustomerDocument
+      summary: Register a customer document and get a presigned upload URL
+      x-authorization:
+        requires:
+          - { permission: customers.documents.upload, target: customer }
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { $ref: '#/components/requestBodies/DocumentRegistration' }
+      responses:
+        '201': { $ref: '#/components/responses/DocumentUpload' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    get:
+      tags: [Documents]
+      operationId: listCustomerDocuments
+      summary: Customer document metadata
+      x-authorization:
+        requires:
+          - { permission: customers.documents.view, target: customer }
+      responses:
+        '200': { $ref: '#/components/responses/DocumentList' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /policies/{policyId}/documents:
+    parameters: [{ $ref: '#/components/parameters/PolicyId' }, { $ref: '#/components/parameters/Tenant' }]
+    post:
+      tags: [Documents]
+      operationId: registerPolicyDocument
+      summary: Register a policy document (proposal form, valuation report) and get a presigned upload URL
+      x-authorization:
+        requires:
+          - { permission: policies.quote, target: policy }
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { $ref: '#/components/requestBodies/DocumentRegistration' }
+      responses:
+        '201': { $ref: '#/components/responses/DocumentUpload' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    get:
+      tags: [Documents]
+      operationId: listPolicyDocuments
+      summary: Policy document metadata
+      x-authorization:
+        requires:
+          - { permission: policies.view, target: policy }
+      responses:
+        '200': { $ref: '#/components/responses/DocumentList' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /claims/{claimId}/documents:
+    parameters: [{ $ref: '#/components/parameters/ClaimId' }, { $ref: '#/components/parameters/Tenant' }]
+    post:
+      tags: [Documents]
+      operationId: registerClaimDocument
+      summary: Register a claim document and get a presigned upload URL
+      x-authorization:
+        requires:
+          - anyOf:
+              - { permission: claims.submit, target: claim }
+              - { permission: claims.assess, target: claim }
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody: { $ref: '#/components/requestBodies/DocumentRegistration' }
+      responses:
+        '201': { $ref: '#/components/responses/DocumentUpload' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    get:
+      tags: [Documents]
+      operationId: listClaimDocuments
+      summary: Claim document metadata
+      x-authorization:
+        requires:
+          - { permission: claims.view, target: claim }
+      responses:
+        '200': { $ref: '#/components/responses/DocumentList' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /documents/{documentId}/complete:
+    post:
+      tags: [Documents]
+      operationId: completeDocumentUpload
+      summary: Confirm the upload; triggers virus scan, then extraction for supported types
+      x-authorization:
+        requires:
+          - { permission: owner.upload, target: document }
+        rules: [uploader-only]
+      parameters: [{ $ref: '#/components/parameters/DocumentId' }, { $ref: '#/components/parameters/Tenant' }]
+      responses:
+        '200': { description: Upload confirmed, content: { application/json: { schema: { $ref: '#/components/schemas/Document' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /documents/{documentId}/content:
+    get:
+      tags: [Documents]
+      operationId: downloadDocument
+      summary: Redirect to a 5-minute presigned download URL
+      description: Every download is audited. Documents whose scan status is not `CLEAN` return `409`.
+      x-authorization:
+        requires:
+          - { permission: owner.view, target: document }
+          - { permission: documents.sensitive.view, target: document, when: "document.sensitivity in (SENSITIVE, MEDICAL)" }
+      parameters: [{ $ref: '#/components/parameters/DocumentId' }, { $ref: '#/components/parameters/Tenant' }]
+      responses:
+        '302':
+          description: Presigned URL
+          headers:
+            Location: { schema: { type: string, format: uri } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /documents/{documentId}/extractions:
+    get:
+      tags: [Documents]
+      operationId: listExtractions
+      summary: Extraction results
+      x-authorization:
+        requires:
+          - { permission: owner.view, target: document }
+          - { permission: documents.sensitive.view, target: document, when: "document.sensitivity in (SENSITIVE, MEDICAL)" }
+      parameters: [{ $ref: '#/components/parameters/DocumentId' }, { $ref: '#/components/parameters/Tenant' }]
+      responses:
+        '200': { description: Extractions, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Extraction' } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /extractions/{extractionId}/verify:
+    post:
+      tags: [Documents]
+      operationId: verifyExtraction
+      summary: Verify or reject extracted fields, with optional corrections
+      x-authorization:
+        requires:
+          - { permission: owner.verify, target: document }
+        rules: [flow-acting-user]
+      parameters: [{ name: extractionId, in: path, required: true, schema: { type: string, format: uuid } }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/ActingUser' }, { $ref: '#/components/parameters/FlowTaskId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [VERIFIED, REJECTED] }
+                correctedFields: { type: object, additionalProperties: true }
+      responses:
+        '200': { description: Verified, content: { application/json: { schema: { $ref: '#/components/schemas/Extraction' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ---------------------------------------------------------------- Intelligence
+  /claims/{claimId}/ai-assessments:
+    parameters: [{ $ref: '#/components/parameters/ClaimId' }, { $ref: '#/components/parameters/Tenant' }]
+    get:
+      tags: [Intelligence]
+      operationId: listClaimAiAssessments
+      summary: Latest AI assessment of each type for the claim
+      x-authorization:
+        requires:
+          - { permission: claims.view, target: claim }
+          - { permission: ai.recommendations.view, target: claim }
+      responses:
+        '200': { description: Assessments, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/AiAssessment' } } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Intelligence]
+      operationId: requestAiAssessment
+      summary: Re-run an assessment type
+      description: Returns `202` with the pending assessment ID. Limited to 10 requests per claim per hour.
+      x-authorization:
+        requires:
+          - { permission: claims.assess, target: claim }
+          - { permission: ai.recommendations.view, target: claim }
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [assessmentType]
+              properties:
+                assessmentType: { $ref: '#/components/schemas/AssessmentType' }
+      responses:
+        '202': { description: Queued, content: { application/json: { schema: { $ref: '#/components/schemas/AiAssessment' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /ai-assessments/{assessmentId}:
+    get:
+      tags: [Intelligence]
+      operationId: getAiAssessment
+      summary: Full output with evidence and tool invocations
+      description: Viewing is audited. Evidence pointing at documents the caller cannot open is returned as `withheld`.
+      x-authorization:
+        requires:
+          - { permission: subject.view, target: subject }
+          - { permission: ai.recommendations.view, target: subject }
+      parameters: [{ $ref: '#/components/parameters/AssessmentId' }, { $ref: '#/components/parameters/Tenant' }]
+      responses:
+        '200': { description: Assessment, content: { application/json: { schema: { $ref: '#/components/schemas/AiAssessment' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /ai-assessments/{assessmentId}/feedback:
+    post:
+      tags: [Intelligence]
+      operationId: rateAiAssessment
+      summary: Rate an AI output
+      x-authorization:
+        requires:
+          - { permission: subject.view, target: subject }
+          - { permission: ai.recommendations.view, target: subject }
+      parameters: [{ $ref: '#/components/parameters/AssessmentId' }, { $ref: '#/components/parameters/Tenant' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rating]
+              properties:
+                rating: { type: string, enum: [HELPFUL, NOT_HELPFUL, INCORRECT] }
+                comment: { type: string, maxLength: 2000 }
+      responses:
+        '204': { description: Recorded }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /policies/{policyId}/coverage-questions:
+    post:
+      tags: [Intelligence]
+      operationId: askCoverageQuestion
+      summary: Ask about a policy's coverage; answered with RAG and clause citations
+      description: Synchronous, 20 s timeout, 20 requests per user per minute. The authoritative coverage-engine result is returned alongside the advisory answer.
+      x-authorization:
+        requires:
+          - { permission: policies.view, target: policy }
+          - { permission: ai.assist, target: policy }
+      parameters: [{ $ref: '#/components/parameters/PolicyId' }, { $ref: '#/components/parameters/Tenant' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question]
+              properties:
+                question: { type: string, minLength: 5, maxLength: 1000 }
+                incidentDate: { type: string, format: date }
+            example: { question: 'Is damage from driving through a flooded road covered?', incidentDate: '2026-11-02' }
+      responses:
+        '200': { description: Advisory answer, content: { application/json: { schema: { $ref: '#/components/schemas/CoverageAnswer' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /claims/{claimId}/assistant/messages:
+    post:
+      tags: [Intelligence]
+      operationId: askClaimAssistant
+      summary: Ask the claim assistant about one claim
+      description: Answers using read-only tools that run with the caller's own scope. Synchronous, 30 s timeout.
+      x-authorization:
+        requires:
+          - { permission: claims.view, target: claim }
+          - { permission: ai.assist, target: claim }
+      parameters: [{ $ref: '#/components/parameters/ClaimId' }, { $ref: '#/components/parameters/Tenant' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                conversationId: { type: string, format: uuid }
+                message: { type: string, minLength: 1, maxLength: 2000 }
+      responses:
+        '200': { description: Advisory answer, content: { application/json: { schema: { $ref: '#/components/schemas/AssistantReply' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /anomalies:
+    get:
+      tags: [Intelligence]
+      operationId: searchAnomalies
+      summary: Anomaly flags
+      x-authorization:
+        filter: claims.investigate
+      parameters:
+        - { $ref: '#/components/parameters/Tenant' }
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/AnomalyStatus' } }
+        - { name: anomalyType, in: query, schema: { type: string } }
+        - { name: severityGte, in: query, schema: { type: integer, minimum: 1, maximum: 5 } }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Size' }
+      responses:
+        '200': { description: Page of anomaly flags, content: { application/json: { schema: { $ref: '#/components/schemas/AnomalyPage' } } } }
+  /anomalies/{anomalyId}:
+    get:
+      tags: [Intelligence]
+      operationId: getAnomaly
+      summary: Anomaly flag with its evidence
+      x-authorization:
+        requires:
+          - { permission: claims.investigate, target: anomaly }
+      parameters: [{ $ref: '#/components/parameters/AnomalyId' }, { $ref: '#/components/parameters/Tenant' }]
+      responses:
+        '200': { description: Anomaly, content: { application/json: { schema: { $ref: '#/components/schemas/Anomaly' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /anomalies/{anomalyId}/status:
+    post:
+      tags: [Intelligence]
+      operationId: changeAnomalyStatus
+      summary: Change an anomaly flag's status
+      description: '`resolutionNote` is required for DISMISSED and CONFIRMED.'
+      x-authorization:
+        requires:
+          - { permission: claims.investigate, target: anomaly }
+        rules: [flow-acting-user]
+      parameters: [{ $ref: '#/components/parameters/AnomalyId' }, { $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IfMatch' }, { $ref: '#/components/parameters/ActingUser' }, { $ref: '#/components/parameters/FlowTaskId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { $ref: '#/components/schemas/AnomalyStatus' }
+                resolutionNote: { type: string, maxLength: 4000 }
+      responses:
+        '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/Anomaly' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /knowledge-documents:
+    post:
+      tags: [Intelligence]
+      operationId: ingestKnowledgeDocument
+      summary: Ingest an uploaded document into the knowledge base
+      x-authorization:
+        requires:
+          - { permission: knowledge.manage, target: tenant }
+      parameters: [{ $ref: '#/components/parameters/Tenant' }, { $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [documentId, sourceType, title]
+              properties:
+                documentId: { type: string, format: uuid }
+                sourceType: { type: string, enum: [POLICY_WORDING, PRODUCT_TERMS, CLAIMS_PROCEDURE, UNDERWRITING_GUIDELINE, REGULATORY_GUIDANCE] }
+                title: { type: string, maxLength: 300 }
+                productCode: { type: string }
+                productVersion: { type: integer }
+      responses:
+        '202': { description: Ingestion queued, content: { application/json: { schema: { $ref: '#/components/schemas/KnowledgeDocument' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    get:
+      tags: [Intelligence]
+      operationId: listKnowledgeDocuments
+      summary: Knowledge documents with status and chunk counts
+      x-authorization:
+        requires:
+          - { permission: knowledge.manage, target: tenant }
+      parameters: [{ $ref: '#/components/parameters/Tenant' }]
+      responses:
+        '200': { description: Knowledge documents, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/KnowledgeDocument' } } } } }
+  /knowledge-documents/{knowledgeDocumentId}/supersede:
+    post:
+      tags: [Intelligence]
+      operationId: supersedeKnowledgeDocument
+      summary: Mark superseded
+      description: Procedures and guidelines leave retrieval. Product wordings stay retrievable for policies sold under that product version.
+      x-authorization:
+        requires:
+          - { permission: knowledge.manage, target: tenant }
+      parameters: [{ name: knowledgeDocumentId, in: path, required: true, schema: { type: string, format: uuid } }, { $ref: '#/components/parameters/Tenant' }]
+      responses:
+        '200': { description: Superseded, content: { application/json: { schema: { $ref: '#/components/schemas/KnowledgeDocument' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------------- Audit
+  /audit-events:
+    get:
+      tags: [Audit]
+      operationId: searchAuditEvents
+      summary: Audit trail
+      description: Events about tenant-wide subjects (products, knowledge documents) are included only if the caller holds `audit.view` on the tenant root.
+      x-authorization:
+        filter: audit.view
+      parameters:
+        - { $ref: '#/components/parameters/Tenant' }
+        - { name: subjectType, in: query, schema: { type: string } }
+        - { name: subjectId, in: query, schema: { type: string, format: uuid } }
+        - { name: actorId, in: query, schema: { type: string } }
+        - { name: action, in: query, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Size' }
+      responses:
+        '200': { description: Page of audit events, content: { application/json: { schema: { $ref: '#/components/schemas/AuditEventPage' } } } }
+
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Keycloak realm `alensi`, audience `alensi-insure`. User tokens from `alensi-insure-web` (Authorization Code + PKCE); service tokens via client credentials.
+
+  parameters:
+    Tenant:
+      name: X-Alensi-Tenant
+      in: header
+      description: Tenant code (e.g. `JUB`). Optional when the token's `organization` claim names exactly one tenant or the caller has one active membership.
+      schema: { type: string, example: JUB }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: Replays with the same key and body return the original response.
+      schema: { type: string, maxLength: 128 }
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      description: The resource's ETag (version). A stale version returns `412`.
+      schema: { type: string }
+    ActingUser:
+      name: X-Acting-User
+      in: header
+      description: Alensi Flow only. Identity user ID of the person who completed the task. Requires the service to hold `workflows.act`; ignored on user tokens.
+      schema: { type: string }
+    FlowTaskId:
+      name: X-Flow-Task-Id
+      in: header
+      description: Alensi Flow task that triggered the command; stored with the audit event.
+      schema: { type: string }
+    Page: { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+    Size: { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+    Sort: { name: sort, in: query, description: '`field,asc|desc`', schema: { type: string } }
+    CustomerId: { name: customerId, in: path, required: true, schema: { type: string, format: uuid } }
+    ProductId: { name: productId, in: path, required: true, schema: { type: string, format: uuid } }
+    VersionNumber: { name: versionNumber, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    PolicyId: { name: policyId, in: path, required: true, schema: { type: string, format: uuid } }
+    ClaimId: { name: claimId, in: path, required: true, schema: { type: string, format: uuid } }
+    DocumentId: { name: documentId, in: path, required: true, schema: { type: string, format: uuid } }
+    AssessmentId: { name: assessmentId, in: path, required: true, schema: { type: string, format: uuid } }
+    AnomalyId: { name: anomalyId, in: path, required: true, schema: { type: string, format: uuid } }
+
+  headers:
+    ETag:
+      description: Resource version for `If-Match`
+      schema: { type: string }
+
+  requestBodies:
+    DocumentRegistration:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/DocumentRegistration' }
+
+  responses:
+    BadRequest:
+      description: Malformed request or field validation failure
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    Unauthorized:
+      description: Missing or invalid token
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    Forbidden:
+      description: The caller can see the record but lacks the permission for this action, or is not a member of the tenant
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    LimitOrForbidden:
+      description: Missing permission, a domain rule refused the caller (segregation of duties, review level), or the amount exceeds the caller's approval limit
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/LimitProblem' }
+          example:
+            type: https://alensi.io/problems/approval-limit-exceeded
+            title: Approval limit exceeded
+            status: 403
+            detail: Approving KES 3,000,000.00 needs a claims.approve limit of at least that amount on JUB-KE-NRB-NWS.
+            permission: claims.approve
+            requestedAmount: { amount: '3000000.00', currency: KES }
+            limits: [{ currency: KES, maxAmount: '1000000.00' }]
+    NotFound:
+      description: Not found, or the caller lacks view permission on the record's unit (no existence leak)
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    Conflict:
+      description: Illegal state transition or duplicate
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    PreconditionFailed:
+      description: If-Match version mismatch
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    BusinessRule:
+      description: Business rule violation
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    TooManyRequests:
+      description: Rate limit exceeded
+      headers:
+        Retry-After: { schema: { type: integer } }
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    Unavailable:
+      description: A required dependency (Identity, Pay, model provider) is unavailable
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    DocumentUpload:
+      description: Document registered; upload with `PUT` to `uploadUrl` within 5 minutes, then call `/documents/{documentId}/complete`
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              document: { $ref: '#/components/schemas/Document' }
+              uploadUrl: { type: string, format: uri }
+              uploadExpiresAt: { type: string, format: date-time }
+    DocumentList:
+      description: Document metadata. Sensitive documents are listed; downloading them needs `documents.sensitive.view`.
+      content:
+        application/json:
+          schema: { type: array, items: { $ref: '#/components/schemas/Document' } }
+
+  schemas:
+    # -------- common
+    Money:
+      type: object
+      required: [amount, currency]
+      properties:
+        amount: { type: string, pattern: '^-?\d+\.\d{2}$', example: '12500.00' }
+        currency: { type: string, pattern: '^[A-Z]{3}$', example: KES }
+    Problem:
+      type: object
+      description: RFC 9457 problem details
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        correlationId: { type: string }
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field: { type: string }
+              message: { type: string }
+    LimitProblem:
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+        - type: object
+          properties:
+            permission: { type: string }
+            requestedAmount: { $ref: '#/components/schemas/Money' }
+            limits:
+              type: array
+              items:
+                type: object
+                properties:
+                  currency: { type: string }
+                  maxAmount: { type: [string, 'null'], description: null means unlimited }
+    PageInfo:
+      type: object
+      properties:
+        page: { type: integer }
+        size: { type: integer }
+        totalElements: { type: integer, format: int64 }
+    RecordScope:
+      type: object
+      description: Ownership fields present on every unit-owned record
+      properties:
+        tenantCode: { type: string, example: JUB }
+        unitCode: { type: string, description: Identity target code of the owning team or branch, example: JUB-KE-NRB-NWS }
+    Restricted:
+      type: object
+      description: Placeholder for an embedded record the caller may not view
+      properties:
+        id: { type: string, format: uuid }
+        restricted: { type: boolean, const: true }
+
+    # -------- session
+    CurrentUser:
+      type: object
+      properties:
+        userId: { type: string }
+        displayName: { type: string }
+        tenantCode: { type: string }
+        permissions:
+          type: array
+          description: Permissions held on at least one target in the tenant
+          items: { type: string }
+
+    # -------- customers
+    CustomerCreate:
+      type: object
+      required: [customerType, unitCode]
+      properties:
+        customerType: { type: string, enum: [INDIVIDUAL, ORGANIZATION] }
+        unitCode: { type: string, description: Owning team or branch; must be inside the caller's customers.create scope }
+        firstName: { type: string }
+        lastName: { type: string }
+        organisationName: { type: string }
+        dateOfBirth: { type: string, format: date }
+        nationalId: { type: string, writeOnly: true }
+        taxNumber: { type: string, writeOnly: true }
+        phone: { type: string, example: '+254712345678' }
+        email: { type: string, format: email }
+        address: { type: string }
+    CustomerUpdate:
+      type: object
+      properties:
+        phone: { type: string }
+        email: { type: string, format: email }
+        address: { type: string }
+    Customer:
+      allOf:
+        - $ref: '#/components/schemas/RecordScope'
+        - type: object
+          properties:
+            id: { type: string, format: uuid }
+            customerNumber: { type: string, example: CUS-2026-001204 }
+            customerType: { type: string, enum: [INDIVIDUAL, ORGANIZATION] }
+            status: { type: string, enum: [ACTIVE, INACTIVE] }
+            displayName: { type: string }
+            dateOfBirth: { type: string, format: date }
+            nationalIdMasked: { type: string, example: '****5678' }
+            phone: { type: string }
+            email: { type: string }
+            address: { type: string }
+            version: { type: integer }
+    CustomerPage:
+      allOf:
+        - $ref: '#/components/schemas/PageInfo'
+        - type: object
+          properties:
+            content: { type: array, items: { $ref: '#/components/schemas/Customer' } }
+    ActivityPage:
+      allOf:
+        - $ref: '#/components/schemas/PageInfo'
+        - type: object
+          properties:
+            content:
+              type: array
+              items:
+                type: object
+                properties:
+                  occurredAt: { type: string, format: date-time }
+                  activityType: { type: string }
+                  subjectType: { type: string }
+                  subjectId: { type: string, format: uuid }
+                  summary: { type: string }
+
+    # -------- products
+    ProductCreate:
+      type: object
+      required: [code, name, lineOfBusiness]
+      properties:
+        code: { type: string, example: MOTOR-COMP }
+        name: { type: string }
+        lineOfBusiness: { type: string, enum: [MOTOR, HEALTH, PROPERTY, LIFE, TRAVEL] }
+        currency: { type: string, default: KES }
+    Product:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        tenantCode: { type: string }
+        code: { type: string }
+        name: { type: string }
+        lineOfBusiness: { type: string }
+        status: { type: string, enum: [ACTIVE, RETIRED] }
+        currentVersion: { type: [integer, 'null'] }
+        versions:
+          type: array
+          items:
+            type: object
+            properties:
+              versionNumber: { type: integer }
+              status: { type: string, enum: [DRAFT, PUBLISHED, WITHDRAWN] }
+    ProductVersion:
+      type: object
+      properties:
+        productId: { type: string, format: uuid }
+        versionNumber: { type: integer }
+        status: { type: string, enum: [DRAFT, PUBLISHED, WITHDRAWN] }
+        effectiveFrom: { type: string, format: date }
+        coverages: { $ref: '#/components/schemas/CoverageConfiguration' }
+        eligibility: { type: array, items: { $ref: '#/components/schemas/EligibilityRule' } }
+        rating: { $ref: '#/components/schemas/Rating' }
+        wordingDocumentId: { type: [string, 'null'], format: uuid }
+        version: { type: integer }
+    CoverageConfiguration:
+      type: object
+      properties:
+        coverages:
+          type: array
+          items:
+            type: object
+            required: [code, name]
+            properties:
+              code: { type: string, example: OWN_DAMAGE }
+              name: { type: string }
+              limitBasis: { type: string, enum: [SUM_INSURED, FIXED] }
+              fixedLimit: { $ref: '#/components/schemas/Money' }
+              deductible:
+                type: object
+                properties:
+                  type: { type: string, enum: [FIXED, PERCENTAGE] }
+                  value: { type: string }
+                  minimum: { $ref: '#/components/schemas/Money' }
+              waitingPeriodDays: { type: integer }
+        exclusions:
+          type: array
+          items:
+            type: object
+            properties:
+              code: { type: string }
+              clauseReference: { type: string, example: 4.2(f) }
+              coverageCodes: { type: array, items: { type: string } }
+              rule: { type: [object, 'null'], description: Structured condition evaluated by the coverage engine }
+              text: { type: string }
+    EligibilityRule:
+      type: object
+      properties:
+        code: { type: string }
+        expression: { type: object, description: Structured condition, e.g. vehicle age ≤ 15 }
+        outcome: { type: string, enum: [DECLINE, REFER] }
+        message: { type: string }
+    Rating:
+      type: object
+      properties:
+        baseRates:
+          type: array
+          items:
+            type: object
+            properties:
+              coverageCode: { type: string }
+              ratePercent: { type: string }
+              minimumPremium: { $ref: '#/components/schemas/Money' }
+        factors:
+          type: array
+          items:
+            type: object
+            properties:
+              factor: { type: string, example: item.vehicle.age }
+              bands:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    band: { type: string, example: 6-10 }
+                    multiplier: { type: string, example: '1.15' }
+
+    # -------- policies
+    PolicyStatus:
+      type: string
+      enum: [QUOTED, REFERRED, DECLINED, PENDING_PAYMENT, ACTIVE, LAPSED, CANCELLED, EXPIRED, QUOTE_EXPIRED]
+    QuoteRequest:
+      type: object
+      required: [customerId, productCode, effectiveDate, paymentFrequency, insuredItems, coverages]
+      properties:
+        customerId: { type: string, format: uuid }
+        unitCode: { type: string, description: Selling team or branch; defaults to the customer's unit }
+        productCode: { type: string }
+        effectiveDate: { type: string, format: date }
+        paymentFrequency: { type: string, enum: [ANNUAL, SEMI_ANNUAL, QUARTERLY, MONTHLY] }
+        insuredItems:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/InsuredItem' }
+        coverages: { type: array, minItems: 1, items: { type: string } }
+    InsuredItem:
+      type: object
+      required: [itemType, sumInsured]
+      properties:
+        id: { type: string, format: uuid, readOnly: true }
+        itemType: { type: string, enum: [VEHICLE, PROPERTY, PERSON, TRIP] }
+        description: { type: string }
+        sumInsured: { $ref: '#/components/schemas/Money' }
+        attributes: { type: object, additionalProperties: true }
+    PolicySummary:
+      allOf:
+        - $ref: '#/components/schemas/RecordScope'
+        - type: object
+          properties:
+            id: { type: string, format: uuid }
+            policyNumber: { type: string, example: POL-2026-000418 }
+            productCode: { type: string }
+            status: { $ref: '#/components/schemas/PolicyStatus' }
+            effectiveDate: { type: string, format: date }
+            expiryDate: { type: string, format: date }
+            totalPremium: { $ref: '#/components/schemas/Money' }
+    Policy:
+      allOf:
+        - $ref: '#/components/schemas/PolicySummary'
+        - type: object
+          properties:
+            customer:
+              oneOf:
+                - type: object
+                  properties:
+                    id: { type: string, format: uuid }
+                    customerNumber: { type: string }
+                    displayName: { type: string }
+                - $ref: '#/components/schemas/Restricted'
+            productVersion: { type: integer }
+            quoteExpiresAt: { type: string, format: date-time }
+            totalSumInsured: { $ref: '#/components/schemas/Money' }
+            insuredItems: { type: array, items: { $ref: '#/components/schemas/InsuredItem' } }
+            coverages: { type: array, items: { $ref: '#/components/schemas/PolicyCoverage' } }
+            rating:
+              type: array
+              items:
+                type: object
+                properties:
+                  factor: { type: string }
+                  band: { type: string }
+                  multiplier: { type: string }
+            eligibility:
+              type: array
+              items:
+                type: object
+                properties:
+                  ruleCode: { type: string }
+                  outcome: { type: string, enum: [DECLINE, REFER] }
+                  message: { type: string }
+            flowProcessId: { type: [string, 'null'] }
+            version: { type: integer }
+    PolicyPage:
+      allOf:
+        - $ref: '#/components/schemas/PageInfo'
+        - type: object
+          properties:
+            content: { type: array, items: { $ref: '#/components/schemas/PolicySummary' } }
+    PolicyCoverage:
+      type: object
+      properties:
+        code: { type: string }
+        limit: { $ref: '#/components/schemas/Money' }
+        deductible: { type: object, properties: { type: { type: string }, value: { type: string } } }
+        premium: { $ref: '#/components/schemas/Money' }
+        consumed: { $ref: '#/components/schemas/Money' }
+        reserved: { $ref: '#/components/schemas/Money' }
+        remaining: { $ref: '#/components/schemas/Money' }
+    CoverageStatus:
+      type: object
+      properties:
+        date: { type: string, format: date }
+        inForce: { type: boolean }
+        premiumInGoodStanding: { type: boolean }
+        applicableCoverages: { type: array, items: { type: string } }
+        reasons: { type: array, items: { type: string } }
+    UnderwritingDecisionRequest:
+      type: object
+      required: [decision, rationale]
+      properties:
+        decision: { type: string, enum: [ACCEPT, ACCEPT_WITH_LOADING, DECLINE] }
+        loadingPercent: { type: string, description: ACCEPT_WITH_LOADING only }
+        additionalExclusions: { type: array, items: { type: string } }
+        rationale: { type: string, minLength: 10, maxLength: 4000 }
+        aiAssessmentId: { type: string, format: uuid }
+
+    # -------- premiums
+    PremiumSchedule:
+      type: object
+      properties:
+        policyId: { type: string, format: uuid }
+        totalPremium: { $ref: '#/components/schemas/Money' }
+        outstanding: { $ref: '#/components/schemas/Money' }
+        installments:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              sequence: { type: integer }
+              dueDate: { type: string, format: date }
+              amount: { $ref: '#/components/schemas/Money' }
+              status: { type: string, enum: [SCHEDULED, DUE, PAYMENT_PENDING, OVERDUE, PAID, WAIVED, CANCELLED] }
+        adjustments:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              adjustmentType: { type: string }
+              amount: { $ref: '#/components/schemas/Money' }
+              createdBy: { type: string }
+              createdAt: { type: string, format: date-time }
+    PremiumAdjustmentRequest:
+      type: object
+      required: [adjustmentType, amount, reason]
+      properties:
+        adjustmentType: { type: string, enum: [LOADING, DISCOUNT, ENDORSEMENT], description: CANCELLATION_REFUND is created by cancellation only }
+        amount: { $ref: '#/components/schemas/Money' }
+        reason: { type: string, maxLength: 2000 }
+    CollectionRequest:
+      type: object
+      required: [paymentMethod]
+      properties:
+        paymentMethod:
+          type: object
+          required: [type]
+          properties:
+            type: { type: string, enum: [MPESA_STK, PAY_METHOD_TOKEN] }
+            phone: { type: string, writeOnly: true }
+            token: { type: string, writeOnly: true }
+    PaymentReference:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        direction: { type: string, enum: [COLLECTION, DISBURSEMENT, REFUND] }
+        sourceType: { type: string, enum: [INSTALLMENT, SETTLEMENT, PREMIUM_ADJUSTMENT] }
+        sourceId: { type: string, format: uuid }
+        amount: { $ref: '#/components/schemas/Money' }
+        payPaymentId: { type: [string, 'null'] }
+        status: { type: string, enum: [INITIATED, PENDING, SUCCEEDED, FAILED, CANCELLED, REFUNDED, UNKNOWN] }
+        lastEventAt: { type: [string, 'null'], format: date-time }
+
+    # -------- claims
+    ClaimStatus:
+      type: string
+      enum: [SUBMITTED, INFORMATION_REQUESTED, UNDER_ASSESSMENT, AWAITING_DECISION, APPROVED, PARTIALLY_APPROVED, REJECTED, SETTLEMENT_IN_PROGRESS, SETTLED, CLOSED, WITHDRAWN]
+    ReviewLevel:
+      type: string
+      enum: [STANDARD, SENIOR, INVESTIGATION]
+    ClaimSubmission:
+      type: object
+      required: [policyId, incidentDate, incidentType, description, items]
+      properties:
+        policyId: { type: string, format: uuid }
+        incidentDate: { type: string, format: date }
+        incidentType: { type: string, example: COLLISION }
+        incidentLocation: { type: string }
+        description: { type: string, maxLength: 8000 }
+        items: { type: array, minItems: 1, items: { $ref: '#/components/schemas/ClaimItemInput' } }
+    ClaimItemInput:
+      type: object
+      required: [coverageCode, description, claimedAmount]
+      properties:
+        coverageCode: { type: string }
+        insuredItemId: { type: string, format: uuid }
+        description: { type: string }
+        claimedAmount: { $ref: '#/components/schemas/Money' }
+    ClaimSummary:
+      allOf:
+        - $ref: '#/components/schemas/RecordScope'
+        - type: object
+          properties:
+            id: { type: string, format: uuid }
+            claimNumber: { type: string, example: CLM-2026-000917 }
+            policyId: { type: string, format: uuid }
+            status: { $ref: '#/components/schemas/ClaimStatus' }
+            priority: { type: string }
+            minimumReviewLevel: { $ref: '#/components/schemas/ReviewLevel' }
+            claimedAmount: { $ref: '#/components/schemas/Money' }
+            reportedAt: { type: string, format: date-time }
+            assignedTo: { type: [string, 'null'] }
+    Claim:
+      allOf:
+        - $ref: '#/components/schemas/ClaimSummary'
+        - type: object
+          properties:
+            policy:
+              oneOf:
+                - $ref: '#/components/schemas/PolicySummary'
+                - $ref: '#/components/schemas/Restricted'
+            incidentDate: { type: string, format: date }
+            incidentType: { type: string }
+            description: { type: string }
+            items:
+              type: array
+              items:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  coverageCode: { type: string }
+                  description: { type: string }
+                  claimedAmount: { $ref: '#/components/schemas/Money' }
+                  assessedAmount: { $ref: '#/components/schemas/Money' }
+                  deductible: { $ref: '#/components/schemas/Money' }
+                  payableAmount: { $ref: '#/components/schemas/Money' }
+            coverageChecks: { type: array, items: { $ref: '#/components/schemas/CoverageCheck' } }
+            informationRequests:
+              type: array
+              items:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  status: { type: string, enum: [OPEN, FULFILLED, CANCELLED] }
+                  requestedItems: { type: array, items: { type: string } }
+                  dueDate: { type: string, format: date }
+            decision:
+              type: [object, 'null']
+              properties:
+                decision: { type: string }
+                approvedAmount: { $ref: '#/components/schemas/Money' }
+                reasonCode: { type: string }
+                rationale: { type: string }
+                decidedBy: { type: string }
+                decidedAt: { type: string, format: date-time }
+                aiAssessmentId: { type: [string, 'null'], format: uuid }
+            settlements: { type: array, items: { $ref: '#/components/schemas/Settlement' } }
+            submittedBy: { type: string }
+            assessedBy: { type: [string, 'null'] }
+            flowProcessId: { type: [string, 'null'] }
+            version: { type: integer }
+    ClaimPage:
+      allOf:
+        - $ref: '#/components/schemas/PageInfo'
+        - type: object
+          properties:
+            content: { type: array, items: { $ref: '#/components/schemas/ClaimSummary' } }
+    CoverageCheck:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        claimItemId: { type: [string, 'null'], format: uuid }
+        result: { type: string, enum: [COVERED, NOT_COVERED, PARTIALLY_COVERED, NEEDS_REVIEW] }
+        trace:
+          type: array
+          items:
+            type: object
+            properties:
+              rule: { type: string, example: C2 }
+              passed: { type: boolean }
+              detail: { type: string }
+        checkedAt: { type: string, format: date-time }
+    InformationRequestInput:
+      type: object
+      required: [requestedItems]
+      properties:
+        requestedItems: { type: array, minItems: 1, items: { type: string } }
+        message: { type: string, maxLength: 4000 }
+        dueDate: { type: string, format: date }
+    AssessmentInput:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [claimItemId, assessedAmount]
+            properties:
+              claimItemId: { type: string, format: uuid }
+              assessedAmount: { $ref: '#/components/schemas/Money' }
+              note: { type: string }
+        summary: { type: string, maxLength: 8000 }
+    ClaimDecisionRequest:
+      type: object
+      required: [decision, reasonCode, rationale, aiAlignment]
+      properties:
+        decision: { type: string, enum: [APPROVED, PARTIALLY_APPROVED, REJECTED] }
+        approvedAmount: { $ref: '#/components/schemas/Money' }
+        reasonCode: { type: string, example: EXCLUSION_APPLIES, description: 'COVERED_IN_FULL, EXCLUSION_APPLIES, NOT_IN_FORCE, INSUFFICIENT_EVIDENCE, LIMIT_EXHAUSTED' }
+        rationale: { type: string, minLength: 10, maxLength: 4000 }
+        aiAssessmentId: { type: string, format: uuid, description: The AI assessment the decider saw }
+        aiAlignment: { type: string, enum: [AGREED, OVERRODE, NOT_AVAILABLE], description: Whether the decider followed the AI recommendation. Used for monitoring, never for staff evaluation }
+    SettlementRequest:
+      type: object
+      required: [payeeType, payeeToken, amount]
+      properties:
+        payeeType: { type: string, enum: [CUSTOMER, SERVICE_PROVIDER] }
+        payeeToken: { type: string, description: Alensi Pay beneficiary token; Insure never stores account details }
+        amount: { $ref: '#/components/schemas/Money' }
+    Settlement:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        payeeType: { type: string }
+        amount: { $ref: '#/components/schemas/Money' }
+        status: { type: string, enum: [PENDING, PAYMENT_INITIATED, PAID, FAILED, CANCELLED] }
+        paymentReferenceId: { type: string, format: uuid }
+        requestedBy: { type: string }
+        requestedAt: { type: string, format: date-time }
+
+    # -------- documents
+    DocumentRegistration:
+      type: object
+      required: [documentType, fileName, contentType, sizeBytes, sha256]
+      properties:
+        documentType: { type: string, example: POLICE_ABSTRACT }
+        fileName: { type: string }
+        contentType: { type: string, enum: [application/pdf, image/jpeg, image/png] }
+        sizeBytes: { type: integer, maximum: 26214400 }
+        sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+        sensitivity: { type: string, enum: [STANDARD, SENSITIVE, MEDICAL], default: STANDARD }
+    Document:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        ownerType: { type: string, enum: [CUSTOMER, POLICY, CLAIM] }
+        ownerId: { type: string, format: uuid }
+        documentType: { type: string }
+        fileName: { type: string }
+        contentType: { type: string }
+        sizeBytes: { type: integer }
+        sensitivity: { type: string, enum: [STANDARD, SENSITIVE, MEDICAL] }
+        scanStatus: { type: string, enum: [PENDING, CLEAN, INFECTED] }
+        extractionStatus: { type: string, enum: [NOT_REQUESTED, PENDING, COMPLETED, FAILED] }
+        uploadedBy: { type: string }
+        uploadedAt: { type: string, format: date-time }
+    Extraction:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        documentId: { type: string, format: uuid }
+        extractedFields: { type: object, additionalProperties: true }
+        confidence: { type: object, additionalProperties: { type: number } }
+        status: { type: string, enum: [COMPLETED, FAILED, VERIFIED, REJECTED] }
+        verifiedBy: { type: [string, 'null'] }
+
+    # -------- intelligence
+    AssessmentType:
+      type: string
+      enum: [CLAIM_TRIAGE, CLAIM_RISK, ANOMALY_EXPLANATION, CLAIM_SUMMARY, COVERAGE_QUESTION, ASSISTANT_RESPONSE, UNDERWRITING_RISK]
+    AdvisoryMetadata:
+      type: object
+      properties:
+        assessmentId: { type: string, format: uuid }
+        advisory: { type: boolean, const: true }
+        modelName: { type: string }
+        promptVersion: { type: string }
+        createdAt: { type: string, format: date-time }
+    AiAssessment:
+      allOf:
+        - $ref: '#/components/schemas/AdvisoryMetadata'
+        - type: object
+          properties:
+            subjectType: { type: string, enum: [CLAIM, POLICY] }
+            subjectId: { type: string, format: uuid }
+            assessmentType: { $ref: '#/components/schemas/AssessmentType' }
+            status: { type: string, enum: [PENDING, COMPLETED, FAILED, REJECTED] }
+            classification: { type: string, enum: [LOW_RISK, REVIEW_REQUIRED, HIGH_RISK] }
+            riskScore: { type: integer, minimum: 0, maximum: 100 }
+            baselineScore: { type: integer, minimum: 0, maximum: 85 }
+            minimumReviewLevel: { $ref: '#/components/schemas/ReviewLevel' }
+            output: { type: object, additionalProperties: true }
+            evidence:
+              type: array
+              items:
+                type: object
+                properties:
+                  sourceType: { type: string, enum: [CLAUSE, DOCUMENT, CLAIM_DATA, ANOMALY] }
+                  reference: { type: string }
+                  excerpt: { type: [string, 'null'] }
+                  withheld: { type: boolean, description: True when the caller may not view the source }
+    CoverageAnswer:
+      allOf:
+        - $ref: '#/components/schemas/AdvisoryMetadata'
+        - type: object
+          properties:
+            answer: { type: string }
+            authoritativeCoverage:
+              type: object
+              properties:
+                policyInForce: { type: boolean }
+                applicableCoverages: { type: array, items: { type: string } }
+                source: { type: string, const: coverage engine }
+            citations:
+              type: array
+              items:
+                type: object
+                properties:
+                  clauseReference: { type: string }
+                  title: { type: string }
+                  excerpt: { type: string }
+            confidence: { type: string, enum: [LOW, MEDIUM, HIGH] }
+            requiresHumanInterpretation: { type: boolean }
+    AssistantReply:
+      allOf:
+        - $ref: '#/components/schemas/AdvisoryMetadata'
+        - type: object
+          properties:
+            conversationId: { type: string, format: uuid }
+            answer: { type: string }
+            citations:
+              type: array
+              items:
+                type: object
+                properties:
+                  sourceType: { type: string }
+                  reference: { type: string }
+            toolCalls: { type: array, items: { type: string } }
+    AnomalyStatus:
+      type: string
+      enum: [OPEN, INVESTIGATING, DISMISSED, CONFIRMED]
+    Anomaly:
+      allOf:
+        - $ref: '#/components/schemas/RecordScope'
+        - type: object
+          properties:
+            id: { type: string, format: uuid }
+            claimId: { type: string, format: uuid }
+            anomalyType: { type: string, example: DUPLICATE_DOCUMENT }
+            severity: { type: integer, minimum: 1, maximum: 5 }
+            status: { $ref: '#/components/schemas/AnomalyStatus' }
+            detector: { type: string }
+            evidence: { type: object, additionalProperties: true }
+            explanation: { type: [string, 'null'], description: Advisory model explanation }
+            resolutionNote: { type: [string, 'null'] }
+            version: { type: integer }
+    AnomalyPage:
+      allOf:
+        - $ref: '#/components/schemas/PageInfo'
+        - type: object
+          properties:
+            content: { type: array, items: { $ref: '#/components/schemas/Anomaly' } }
+    KnowledgeDocument:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        documentId: { type: string, format: uuid }
+        sourceType: { type: string }
+        title: { type: string }
+        productCode: { type: [string, 'null'] }
+        productVersion: { type: [integer, 'null'] }
+        status: { type: string, enum: [INGESTING, ACTIVE, SUPERSEDED, FAILED] }
+        chunkCount: { type: integer }
+
+    # -------- audit
+    AuditEvent:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        occurredAt: { type: string, format: date-time }
+        actorId: { type: string }
+        onBehalfOf: { type: [string, 'null'] }
+        flowTaskId: { type: [string, 'null'] }
+        action: { type: string, example: claim.decided }
+        subjectType: { type: string }
+        subjectId: { type: string, format: uuid }
+        unitCode: { type: [string, 'null'] }
+        correlationId: { type: string }
+        details: { type: object, additionalProperties: true }
+    AuditEventPage:
+      allOf:
+        - $ref: '#/components/schemas/PageInfo'
+        - type: object
+          properties:
+            content: { type: array, items: { $ref: '#/components/schemas/AuditEvent' } }

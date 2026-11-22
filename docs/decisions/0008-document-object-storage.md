@@ -15,7 +15,7 @@ Customers, policies, and claims accumulate documents: identity documents, police
 - Server-side encryption with KMS keys; bucket is private with public access blocked.
 - Upload: client registers the document, receives a presigned `PUT` URL (5 minutes, size and content-type constrained), then confirms. Content type is verified from magic bytes after upload.
 - Every upload is **virus-scanned** before it can be downloaded or sent for extraction.
-- Download: after a permission check (`insure.documents.read`, or `read-sensitive` for `SENSITIVE`/`MEDICAL`), the API redirects to a presigned `GET` URL valid for 5 minutes. Every download is audited.
+- Download: after a permission check (the owner's view permission, plus `documents.sensitive.view` for `SENSITIVE`/`MEDICAL`; see [Authorization](../api/authorization.md#document-permissions-by-owner)), the API redirects to a presigned `GET` URL valid for 5 minutes. Every download is audited.
 - Object versioning and lifecycle rules enforce retention.
 
 ## Consequences
