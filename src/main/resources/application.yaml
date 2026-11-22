@@ -1,0 +1,52 @@
+server:
+  port: 8091
+
+spring:
+  application:
+    name: alensi-insure
+  # Runtime role: subject to row-level security (ADR-0009).
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5434/alensi_insure}
+    username: ${DB_USERNAME:insure_app}
+    password: ${DB_PASSWORD:insure_app}
+  # Migrations run as the owner role, never as the runtime role.
+  flyway:
+    user: ${DB_OWNER_USERNAME:insure_owner}
+    password: ${DB_OWNER_PASSWORD:insure_owner}
+    default-schema: flyway
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  data:
+    web:
+      pageable:
+        max-page-size: 100
+  mvc:
+    problemdetails:
+      enabled: true
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${KEYCLOAK_ISSUER:http://localhost:8180/realms/alensi}
+          audiences: alensi-insure
+
+alensi:
+  identity:
+    client:
+      base-url: ${IDENTITY_URL:http://localhost:8090}
+      application: alensi-insure
+
+insure:
+  # AES-256-GCM key for national IDs and HMAC key for their lookup hash, both base64 (32 bytes).
+  # No defaults: set them from the secrets manager (development values are in application-local.yaml).
+  pii:
+    encryption-key: ${INSURE_PII_ENCRYPTION_KEY:}
+    hash-key: ${INSURE_PII_HASH_KEY:}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

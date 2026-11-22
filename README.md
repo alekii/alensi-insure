@@ -555,9 +555,15 @@ Alensi Insure is designed as a reference implementation for exploring:
 
 ## Project Status
 
-This repository represents the planned architecture and implementation of Alensi Insure.
+Alensi Insure is developed incrementally, starting with the core insurance domain before introducing the intelligence layer.
 
-The project will be developed incrementally, starting with the core insurance domain before introducing the intelligence layer.
+**Implemented so far:** the platform foundation and customers.
+
+- Spring Boot 4 modular monolith, with module boundaries verified by Spring Modulith ([ADR-0001](docs/decisions/0001-modular-monolith.md))
+- Sign-in and permissions through Alensi Identity: the request's tenant, unit-scoped checks and list filtering ([ADR-0003](docs/decisions/0003-auth-via-alensi-identity.md))
+- Tenant isolation enforced twice, by the application and by PostgreSQL row-level security ([ADR-0009](docs/decisions/0009-tenant-isolation-row-level-security.md))
+- Audit trail, RFC 9457 problem responses, ETags with `If-Match`, correlation IDs
+- Customers: register, search, view, update contact details, deactivate. National IDs are encrypted, looked up by hash and only shown masked
 
 Planned development stages:
 
@@ -582,6 +588,41 @@ Planned development stages:
        ↓
 10. Observability & Production Hardening
 ```
+
+## Running Locally
+
+Requires Java 21 and Docker.
+
+1. Start Keycloak and Alensi Identity, and register Insure's clients and permissions (from [alensi-identity](https://github.com/alekii/alensi-identity)):
+   ```bash
+   cd ../alensi-identity
+   docker compose up -d
+   ./mvnw -pl client install                      # the identity starter, until it is published
+   ./mvnw -pl service spring-boot:run &
+   python3 scripts/register_application.py catalog/alensi-insure.json
+   ```
+2. Start Insure's database and Insure (port 8091):
+   ```bash
+   docker compose up -d
+   ./mvnw spring-boot:run -Dspring-boot.run.profiles=local
+   ```
+3. Sign in through `alensi-insure-web` and call the API, e.g. `GET http://localhost:8091/api/v1/me`. For scripts,
+   `scripts/dev_login.py` in alensi-identity signs in with MFA:
+   ```bash
+   python3 ../alensi-identity/scripts/dev_login.py alice alice --org jub \
+       --client alensi-insure-web --redirect http://localhost:3001/callback
+   ```
+
+`./mvnw verify` runs all tests against a real PostgreSQL in Docker (Testcontainers), as the runtime role, so row-level security is exercised.
+
+| Setting | Default | Notes |
+|---|---|---|
+| `DB_URL` | `jdbc:postgresql://localhost:5434/alensi_insure` | |
+| `DB_USERNAME` / `DB_PASSWORD` | `insure_app` | Runtime role, subject to row-level security |
+| `DB_OWNER_USERNAME` / `DB_OWNER_PASSWORD` | `insure_owner` | Flyway migrations only |
+| `KEYCLOAK_ISSUER` | `http://localhost:8180/realms/alensi` | Tokens must have `aud=alensi-insure` |
+| `IDENTITY_URL` | `http://localhost:8090` | Alensi Identity |
+| `INSURE_PII_ENCRYPTION_KEY`, `INSURE_PII_HASH_KEY` | none (`local` profile has development keys) | Base64, 32 bytes each, from the secrets manager |
 
 ## Documentation
 

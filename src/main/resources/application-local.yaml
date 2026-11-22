@@ -1,0 +1,5 @@
+# Development only: ./mvnw spring-boot:run -Dspring-boot.run.profiles=local
+insure:
+  pii:
+    encryption-key: ZGV2LW9ubHktZW5jcnlwdGlvbi1rZXktMzItYnl0ZXM=
+    hash-key: ZGV2LW9ubHktbG9va3VwLWhhc2gta2V5LTMyLWJ5dGU=

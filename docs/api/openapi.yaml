@@ -23,12 +23,12 @@ info:
     | `rules[]` | Domain rules enforced in Insure on top of permissions. |
 
     Permission codes are those of application `alensi-insure` in Alensi Identity
-    (`catalog/alensi-insure.json`). Codes marked *proposed* in authorization.md are not yet in the catalog.
+    (`catalog/alensi-insure.json`).
   contact:
     name: Alensi
     url: https://github.com/alekii/alensi-insure
 servers:
-  - url: http://localhost:8080/api/v1
+  - url: http://localhost:8091/api/v1
     description: Local
 security:
   - bearer: []
@@ -1495,6 +1495,8 @@ components:
         phone: { type: string, example: '+254712345678' }
         email: { type: string, format: email }
         address: { type: string }
+        city: { type: string }
+        countryCode: { type: string, pattern: '^[A-Z]{2}$', example: KE }
     CustomerUpdate:
       type: object
       properties:
@@ -1516,6 +1518,8 @@ components:
             phone: { type: string }
             email: { type: string }
             address: { type: string }
+            city: { type: string }
+            countryCode: { type: string, example: KE }
             version: { type: integer }
     CustomerPage:
       allOf:
@@ -2111,7 +2115,7 @@ components:
     AuditEvent:
       type: object
       properties:
-        id: { type: string, format: uuid }
+        id: { type: integer, format: int64 }
         occurredAt: { type: string, format: date-time }
         actorId: { type: string }
         onBehalfOf: { type: [string, 'null'] }
