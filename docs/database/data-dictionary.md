@@ -15,7 +15,8 @@ Column-level reference for every table. Relationships are drawn in the [ERD](erd
 | Enums | `varchar` with a `CHECK` constraint, not PostgreSQL enum types, so new values are an additive migration |
 | Audit columns | Mutable aggregate roots have `version bigint` (optimistic lock), `created_at`, `updated_at`, `created_by uuid`, `updated_by uuid`. These are listed once here and omitted from the tables below |
 | Users | User references (`*_by`, `assigned_to`) are Alensi Identity user IDs (the Keycloak `sub`). No foreign key — users live in Identity |
-| Branch scope | `branch_code` is an Alensi Identity target code. Authorization filters on it |
+| Tenant | Every table holding insurer data has `tenant_code varchar(16) not null` (an Alensi Identity tenant, e.g. `JUB`). It leads every index, foreign keys between tenant tables are composite (`tenant_code`, `id`), every query filters on it, and a row-level security policy enforces it again in the database ([Row-Level Security](../api/authorization.md#row-level-security)). The `messaging` schema is the only exception. Like audit columns, it is omitted from the tables below |
+| Unit scope | `unit_code` is the Alensi Identity target code of the owning team or branch. Authorization filters on it; see [Authorization](../api/authorization.md#record-ownership) |
 | Soft delete | Not used. Records move to terminal statuses; personal-data erasure is handled by an anonymisation job |
 
 Columns marked **PII** contain personal data and are excluded from AI prompts and non-essential logs (see [Intelligence Architecture](../ai/intelligence-architecture.md#data-protection)).
@@ -42,10 +43,10 @@ Columns marked **PII** contain personal data and are excluded from AI prompts an
 | address_line1 | varchar(255) | yes | **PII** |
 | city | varchar(100) | yes | |
 | country_code | char(2) | no | ISO 3166-1 alpha-2 |
-| branch_code | varchar(64) | no | Owning branch (Identity target) |
+| unit_code | varchar(64) | no | Owning team or branch (Identity target) |
 | status | varchar(16) | no | `ACTIVE`, `INACTIVE` |
 
-Indexes: `(national_id_hash)` unique, `(branch_code, status)`, `(lower(last_name), first_name)`.
+Indexes: `(tenant_code, national_id_hash)` unique, `(tenant_code, unit_code, status)`, `(lower(last_name), first_name)`.
 
 ### customer.customer_activity
 
@@ -165,7 +166,7 @@ Constraint: at most one `PUBLISHED` version per product has overlapping effectiv
 | total_premium | decimal(19,4) | no | Rated premium after loadings, discounts, and minimum |
 | currency | char(3) | no | Copied from the product version |
 | payment_frequency | varchar(16) | no | `ANNUAL`, `SEMI_ANNUAL`, `QUARTERLY`, `MONTHLY` |
-| branch_code | varchar(64) | no | Owning branch; defaults to the customer's |
+| unit_code | varchar(64) | no | Selling team or branch; defaults to the customer's |
 | renewed_from_policy_id | uuid | yes | FK → `policy.policy`; set on renewals |
 | quote_expires_at | timestamptz | yes | Set while `QUOTED` |
 | issued_at | timestamptz | yes | When the policy became `ACTIVE` for the first time |
@@ -173,7 +174,7 @@ Constraint: at most one `PUBLISHED` version per product has overlapping effectiv
 | cancellation_reason | varchar(32) | yes | `CUSTOMER_REQUEST`, `NON_PAYMENT`, `MISREPRESENTATION`, `REPLACED`, `OTHER` |
 | flow_process_id | varchar(64) | yes | Alensi Flow process handling underwriting referral, if any |
 
-Indexes: `(customer_id)`, `(status, expiry_date)` for expiry and renewal jobs, `(branch_code, status)`.
+Indexes: `(customer_id)`, `(status, expiry_date)` for expiry and renewal jobs, `(tenant_code, unit_code, status)`.
 
 ### policy.insured_item
 
@@ -298,12 +299,12 @@ Exactly one of `installment_id`, `settlement_id`, `adjustment_id` is set (`CHECK
 | currency | char(3) | no | Policy currency |
 | priority | varchar(8) | no | `LOW`, `NORMAL`, `HIGH`, `URGENT`. Initial value from deterministic rules; changed by handlers |
 | assigned_to | uuid | yes | Current handler, maintained from Flow task assignment |
-| branch_code | varchar(64) | no | Copied from the policy |
+| unit_code | varchar(64) | no | Copied from the policy |
 | minimum_review_level | varchar(16) | no | `STANDARD`, `SENIOR`, `INVESTIGATION`. Only increases; enforced when the decision is recorded |
 | flow_process_id | varchar(64) | yes | Alensi Flow claim process instance |
 | closed_at | timestamptz | yes | |
 
-Indexes: `(policy_id)`, `(customer_id, incident_date)` for duplicate and frequency detection, `(branch_code, status)`.
+Indexes: `(policy_id)`, `(customer_id, incident_date)` for duplicate and frequency detection, `(tenant_code, unit_code, status)`.
 
 ### claims.claim_item
 

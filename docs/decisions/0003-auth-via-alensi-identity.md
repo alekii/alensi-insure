@@ -5,30 +5,31 @@
 
 ## Context
 
-Alensi Identity provides centralised identity on Keycloak (realm `alensi`) and an ACL model: applications register permissions, roles bundle permissions, and users are granted roles on **targets** arranged in a hierarchy, with grants inherited by descendant targets. It exposes a permission API for services:
+Alensi Identity provides centralised identity on Keycloak (realm `alensi`) and an ACL model: applications register permissions, roles bundle permissions, and users are granted roles on **targets** arranged in a hierarchy, with grants inherited by descendant targets. Each insurer is a **tenant** with its own target subtree, and some permissions carry per-currency **approval limits**. It exposes a permission API for services:
 
 ```text
 GET /api/users/{user}/applications/{application}/permissions/{permission}/targets/{target}
 GET /api/users/{user}/applications/{application}/permissions/{permission}/targets
 ```
 
-Insurance access is naturally scoped by organisation: an agent works for a branch, a claims manager approves for a region. Insure needs both "can this user do X?" and "on which records?".
+Insurance access is naturally scoped by organisation: an agent works for a team or branch, a claims manager approves for a region up to an amount. Insure needs "can this user do X?", "on which records?" and "up to how much?".
 
 ## Decision
 
 - Insure stores **no** users, passwords, roles, or grants.
 - Insure is an **OAuth2 resource server** validating Keycloak JWTs locally (issuer `…/realms/alensi`, audience `alensi-insure`).
-- Insure registers as application **`alensi-insure`** in Identity with the permission catalogue in the [API Specification](../api/api-spec.md#permissions).
-- Every branch-owned record (customer, policy, claim) carries `branch_code`, an Identity **target** code in the hierarchy `country → region → branch`.
-- Record-level authorization calls Identity's permission API with the record's branch, cached in Redis for 60 seconds. List queries are filtered by the set of targets on which the user holds the read permission.
-- If Identity is unreachable and nothing is cached, requests **fail closed** (`503`).
+- Insure is registered as application **`alensi-insure`** in Identity's catalog (`catalog/alensi-insure.json` in alensi-identity), which defines its permissions, default roles and limits.
+- Every record carries `tenant_code` and `unit_code`, the Identity **target** code of the owning team or branch in the hierarchy `company → country → region → branch → team`.
+- Insure uses `alensi-identity-spring-boot-starter`: record checks and list scopes come from the caller's permission map, cached in-process per user and tenant for 30 seconds; limited permissions are checked live with the amount.
+- If Identity is unreachable, requests **fail closed** (`503`).
+- The per-endpoint contract is [Authorization and Data Scoping](../api/authorization.md).
 - Service-to-service calls use client credentials (`alensi-insure`, `alensi-flow` clients).
-- Flow acts on behalf of users via `X-Acting-User`, accepted only from callers holding `insure.workflow.act`; both identities are checked and audited.
+- Flow acts on behalf of users via `X-Acting-User`, accepted only from callers holding `workflows.act`; both identities are checked and audited.
 
 ## Consequences
 
 - Role design and grant management happen once, in Identity, for the whole platform.
-- Revoking a grant takes effect within the cache TTL (≤ 60 s).
+- Revoking a grant takes effect within the cache TTL (≤ 30 s). Approval limits take effect immediately.
 - Insure adds latency for uncached permission checks; the cache and batch target lookups keep it low.
 - `X-Acting-User` means Insure trusts Flow to assert who completed a task. This is mitigated by restricting the header to one service permission and by re-checking the acting user's own permissions, but it is weaker than a user-bound token.
 

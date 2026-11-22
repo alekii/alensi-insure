@@ -12,6 +12,7 @@ Each ADR records one significant decision: the context, what was decided, and th
 | [0006](0006-ai-advisory-only.md) | AI outputs are advisory, structured, and recorded | Accepted |
 | [0007](0007-transactional-outbox.md) | Domain events published through a transactional outbox | Accepted |
 | [0008](0008-document-object-storage.md) | Documents in S3-compatible object storage | Accepted |
+| [0009](0009-tenant-isolation-row-level-security.md) | Tenant isolation enforced in the application and by PostgreSQL row-level security | Accepted |
 
 ## Template
 

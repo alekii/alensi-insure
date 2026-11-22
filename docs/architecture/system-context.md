@@ -43,18 +43,18 @@ flowchart TB
 
 ## Users
 
-Insure is a **staff-facing** system in its first version. Every user is an Alensi Identity user with roles granted on one or more branch targets.
+Insure is a **staff-facing** system in its first version. Every user is an Alensi Identity user, a member of one or more insurers (tenants), with roles granted on targets in that insurer's hierarchy (company, country, region, branch, team). Roles and permissions come from Identity's `alensi-insure` catalog; see [Authorization and Data Scoping](../api/authorization.md).
 
-| Actor | Main activities | Typical permissions |
+| Actor (Identity role) | Main activities | Key permissions |
 |---|---|---|
-| Customer service agent | Register customers, quote, issue and cancel policies, lodge claims, upload documents | `insure.customers.write`, `insure.policies.write`, `insure.claims.submit` |
-| Underwriter | Review referred applications, accept or decline risk | `insure.underwriting.decide` |
-| Claims handler / adjuster | Assess claims, record assessed amounts, request information, read AI outputs | `insure.claims.assess`, `insure.ai.read` |
-| Claims manager | Approve, partially approve, or reject claims | `insure.claims.decide` |
-| Finance | Premium adjustments, settlement oversight | `insure.premiums.adjust`, `insure.claims.settle` |
-| Fraud investigator | Investigate and resolve anomaly flags | `insure.anomalies.investigate` |
-| Product manager | Configure products, coverages, rating, and policy wordings for RAG | `insure.products.manage`, `insure.knowledge.manage` |
-| Auditor | Read-only access to decisions, AI assessments, and audit trail | `insure.audit.read` |
+| Agent, team lead, customer service (`agent`, `team-lead`, `customer-service`) | Register customers, quote and issue policies, lodge claims, upload documents | `customers.create`, `policies.quote`, `policies.issue`, `claims.submit` |
+| Underwriter (`underwriter`, `senior-underwriter`) | Review referred applications, accept or decline risk | `policies.underwrite` (limited by sum insured) |
+| Claims adjuster (`claims-adjuster`) | Assess claims, record assessed amounts, request information, read AI outputs | `claims.assess`, `ai.recommendations.view` |
+| Claims approver (`claims-officer`, `branch-manager`, `regional-manager`, `head-of-claims`) | Approve, partially approve, or reject claims | `claims.approve` (limited by amount), `claims.reject` |
+| Finance (`finance-officer`) | Premium adjustments, collections, claim payouts | `premiums.adjust`, `payments.record`, `claims.settle` (limited by amount) |
+| Claims investigator (`claims-investigator`) | Investigate and resolve anomaly flags | `claims.investigate` |
+| Product manager (`product-manager`) | Configure products, coverages, rating, and policy wordings for RAG | `products.manage`, `coverage.manage`, `knowledge.manage` |
+| Auditor (`auditor`) | Read-only access to decisions, AI assessments, and audit trail | `audit.view` |
 
 Human tasks — "review this referred application", "approve this claim" — are presented and tracked by **Alensi Flow**. The user completes the task in Flow; Flow calls Insure to record the outcome. Insure never maintains its own review queues. See [ADR-0002](../decisions/0002-workflow-orchestration-in-alensi-flow.md).
 

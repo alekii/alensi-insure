@@ -120,7 +120,7 @@ See [Intelligence Architecture](../ai/intelligence-architecture.md).
 
 | Component | Responsibility |
 |---|---|
-| security | OAuth2 resource server configuration, `@RequiresPermission` annotation, Identity permission client with Redis cache, acting-user resolution for Flow calls |
+| security | OAuth2 resource server configuration, `alensi-identity-spring-boot-starter` (`AlensiAccess`: record checks, list scopes, approval limits), tenant resolution, acting-user resolution for Flow calls |
 | audit | Append-only audit events with actor, action, subject, correlation ID |
 | messaging | Transactional outbox, outbox relay to RabbitMQ, inbox (processed messages) for idempotent consumption |
 | pay-client | REST client for Alensi Pay with idempotency keys, timeouts, retries, and circuit breaker |

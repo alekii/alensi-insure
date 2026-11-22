@@ -128,11 +128,11 @@ Thresholds are configuration owned by the claims team. Flow can always route **h
 
 | Level | Insure requires of the deciding user |
 |---|---|
-| `STANDARD` | `insure.claims.decide` |
-| `SENIOR` | `insure.claims.decide-senior` |
-| `INVESTIGATION` | `insure.claims.decide-senior`, and every anomaly flag on the claim `DISMISSED` or `CONFIRMED` |
+| `STANDARD` | `claims.approve` within their amount limit, or `claims.reject` |
+| `SENIOR` | As `STANDARD`, plus `claims.approve-senior` |
+| `INVESTIGATION` | As `SENIOR`, and every anomaly flag on the claim `DISMISSED` or `CONFIRMED` |
 
-The level only ever increases during a claim's life; re-assessment cannot lower it.
+The level only ever increases during a claim's life; re-assessment cannot lower it. A person with `claims.escalate` can raise it (`POST /claims/{id}/escalations`). See [Authorization](../api/authorization.md#review-level).
 
 ## Re-assessment
 

@@ -11,7 +11,7 @@ flowchart TB
         api["<b>Insure Application</b><br/>Spring Boot<br/><i>REST API, domain modules,<br/>intelligence layer, event consumers</i>"]
         worker["<b>Insure Worker</b><br/>Same artifact, worker profile<br/><i>AI jobs, document extraction,<br/>knowledge ingestion, schedulers</i>"]
         db[("<b>PostgreSQL</b><br/><i>Domain data, audit,<br/>outbox, pgvector embeddings</i>")]
-        redis[("<b>Redis</b><br/><i>Permission-check cache,<br/>idempotency keys, rate limits</i>")]
+        redis[("<b>Redis</b><br/><i>Idempotency keys,<br/>rate limits</i>")]
         s3[("<b>Object Storage</b><br/>S3 / MinIO<br/><i>Uploaded documents</i>")]
     end
 
@@ -78,11 +78,10 @@ Short-lived, reconstructible state only:
 
 | Key space | Purpose | TTL |
 |---|---|---|
-| `perm:{user}:{permission}:{target}` | Cached Identity permission check result | 60 s |
 | `idem:{client}:{key}` | Idempotency-Key replay protection for POST requests | 24 h |
 | `rl:ai:{user}` | Per-user rate limit for interactive AI endpoints | 1 min window |
 
-Losing Redis degrades performance; it never loses data.
+Losing Redis degrades performance; it never loses data. Identity permission maps are cached in-process by `alensi-identity-spring-boot-starter` (30 s per user and tenant), not in Redis.
 
 ### Object Storage
 
